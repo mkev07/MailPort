@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MailPort Vault",
+  "version": "0.1.0",
+  "identifier": "org.mailport.vault",
+  "build": {
+    "beforeDevCommand": "MAILPORT_PORT=1491 npm run dev",
+    "devUrl": "http://localhost:1491",
+    "frontendDist": "../dist",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "MailPort Vault",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 700,
+        "minHeight": 560,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": true,
+        "backgroundColor": "#171717",
+        "backgroundThrottling": "throttle",
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost https://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost https://ipc.localhost http://localhost:1491 ws://localhost:1491; object-src 'none'; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "macos/Assets.car": "Assets.car"
+    },
+    "macOS": {
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": "-"
+    },
+    "linux": {
+      "rpm": {
+        "depends": [
+          "gtk3",
+          "libappindicator-gtk3",
+          "librsvg2",
+          "openssl-libs",
+          "webkit2gtk4.1"
+        ]
+      }
+    }
+  },
+  "plugins": {}
+}

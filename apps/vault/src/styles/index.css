@@ -1,0 +1,1725 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
+
+/* Tailwind's own `:is(:where(.group):focus-within *)` hides `.group` from
+   WebKit's invalidation, so every focus move rechecks the whole page. With
+   the whole group inside `:where()` WebKit keys the rule on `.group`. */
+@custom-variant group-focus-within (&:where(.group:focus-within *));
+
+@container settings (width < 560px) {
+  .settings-row {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .settings-row-control {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  .settings-row:has(> .settings-row-control > [role="switch"]:only-child) {
+    flex-direction: row;
+    gap: 1.5rem;
+  }
+}
+
+@theme {
+  /* Preserve descenders in compact labels, including two 10px lines in a 30px tab. */
+  --leading-label: 1.4;
+  --color-background-base: hsl(
+    var(--theme-hue) var(--theme-saturation) var(--background-lightness)
+  );
+  --color-content: hsl(
+    var(--theme-hue) var(--theme-saturation) var(--content-lightness)
+  );
+  /* Structural separators: use border-stroke, divide-stroke, or bg-stroke. */
+  --color-stroke: color-mix(in srgb, var(--color-content) 7%, transparent);
+  /* Interactive fills keep their dark-theme contrast but use gentler ink in
+     light mode. Prefer these over content opacity for selected/raised UI. */
+  --color-selection-subtle: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-subtle-strength),
+    transparent
+  );
+  --color-selection: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-strength),
+    transparent
+  );
+  --color-selection-strong: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-strong-strength),
+    transparent
+  );
+  --color-selection-hover: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-hover-strength),
+    transparent
+  );
+  --color-selection-emphasis: color-mix(
+    in srgb,
+    var(--color-content) var(--selection-emphasis-strength),
+    transparent
+  );
+  --color-accent: hsl(211 92% 62%);
+  --color-skill: #e8c547;
+  --color-mention: #38bdf8;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  /* Diff colors. `diff-add`/`diff-del` are the solid marker hues, `-fg` is
+     readable text on the theme background, `-bg`/`-gutter` are row tints.
+     Palettes below swap them; diff UI must also show a +/- glyph so color is
+     never the only cue. */
+  --color-diff-add: #10b981;
+  --color-diff-add-fg: #6ee7b7;
+  --color-diff-add-bg: color-mix(
+    in srgb,
+    var(--color-diff-add) 15%,
+    transparent
+  );
+  --color-diff-add-gutter: color-mix(
+    in srgb,
+    var(--color-diff-add) 25%,
+    transparent
+  );
+  --color-diff-del: #f43f5e;
+  --color-diff-del-fg: #fda4af;
+  --color-diff-del-bg: color-mix(
+    in srgb,
+    var(--color-diff-del) 15%,
+    transparent
+  );
+  --color-diff-del-gutter: color-mix(
+    in srgb,
+    var(--color-diff-del) 25%,
+    transparent
+  );
+}
+
+/* Code colours for the editor, diffs and previews (editorLanguage.ts).
+   VS Code's Dark+ by default; light mode (Light+) and the inset workspace
+   themes swap them below. */
+:root {
+  /* Code text in the file editor and the unified diff. */
+  --code-font-size: 12.5px;
+  --syntax-keyword: #569cd6;
+  --syntax-callable: #dcdcaa;
+  --syntax-string: #ce9178;
+  --syntax-type: #4ec9b0;
+  --syntax-tag: #569cd6;
+  --syntax-number: #b5cea8;
+  --syntax-comment: #6a9955;
+  --syntax-property: #9cdcfe;
+  --syntax-meta: #dcdcaa;
+  --syntax-invalid: #f44747;
+}
+
+/* Static so Tailwind always emits it: only xterm reads it, via JS. */
+@theme static {
+  /* Terminal-only stack. JetBrains Mono Nerd Font leads so prompt text and
+     icons share one face; the Nerd Font families after the system monos fill
+     Private Use Area glyphs (powerline arrows, git/folder icons) because
+     WebKit's fallback never reaches user-installed icon fonts on its own. */
+  --font-terminal:
+    "JetBrainsMono NFM", "JetBrainsMono Nerd Font Mono", "JetBrainsMono NF",
+    ui-monospace, SFMono-Regular, Menlo, Monaco, "Symbols Nerd Font Mono",
+    "Symbols Nerd Font", "MesloLGS NF", "MesloLGS Nerd Font Mono",
+    "FiraCode Nerd Font Mono", "Hack Nerd Font Mono",
+    "CaskaydiaCove Nerd Font Mono", Consolas, "Liberation Mono", "Courier New",
+    monospace;
+}
+
+:root {
+  --motion-reorder-duration: 160ms;
+  --motion-tab-close-duration: 200ms;
+  --motion-feedback-duration: 120ms;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-tab-ease-out: cubic-bezier(0.3333, 0.6667, 0.6667, 1);
+  --theme-hue: 240;
+  --theme-saturation: 0%;
+  --theme-dark-lightness: 9%;
+  --sidebar-opacity: 0.85;
+  --window-background-opacity: 0.4;
+  --chat-background-empty-opacity: 0.24;
+  --chat-background-session-opacity: 0.24;
+  /* The Haze fades its artwork out toward the composer. */
+  --chat-background-fade-mask: linear-gradient(
+    to bottom,
+    #000 0 19%,
+    rgb(0 0 0 / 94%) 30%,
+    rgb(0 0 0 / 72%) 42%,
+    rgb(0 0 0 / 42%) 54%,
+    rgb(0 0 0 / 16%) 66%,
+    rgb(0 0 0 / 4%) 78%,
+    transparent 90%
+  );
+  --chat-background-session-fade-mask: linear-gradient(
+    to bottom,
+    #000 0 18%,
+    transparent 76%
+  );
+  /*
+   * The Haze also darkens toward the bottom, so it reads as gone by the
+   * middle. Plain images have no overlay; these masks bake that darkening in.
+   */
+  --chat-background-image-fade-mask: linear-gradient(
+    to bottom,
+    #000 0 19%,
+    rgb(0 0 0 / 79%) 30%,
+    rgb(0 0 0 / 50%) 42%,
+    rgb(0 0 0 / 20%) 54%,
+    rgb(0 0 0 / 5%) 64%,
+    transparent 72%
+  );
+  --chat-background-image-session-fade-mask: linear-gradient(
+    to bottom,
+    #000 0 18%,
+    rgb(0 0 0 / 61%) 32%,
+    rgb(0 0 0 / 32%) 47%,
+    rgb(0 0 0 / 11%) 62%,
+    transparent 72%
+  );
+  --selection-subtle-strength: 8%;
+  --selection-strength: 10%;
+  --selection-strong-strength: 12%;
+  --selection-hover-strength: 15%;
+  --selection-emphasis-strength: 20%;
+  --background-lightness: var(--theme-dark-lightness);
+  --content-lightness: 92%;
+  --link-color: #7dd3fc;
+  --color-skill: #e8c547;
+  --color-mention: #38bdf8;
+  --color-markdown-heading: #f9a8c9;
+}
+
+html {
+  color-scheme: dark;
+}
+
+html.theme-light {
+  --background-lightness: 97%;
+  --content-lightness: 18%;
+  --link-color: hsl(211 92% 40%);
+  --color-skill: #a07c10;
+  --color-mention: #0284c7;
+  --color-markdown-heading: #be185d;
+  --selection-subtle-strength: 5%;
+  --selection-strength: 6%;
+  --selection-strong-strength: 7%;
+  --selection-hover-strength: 10%;
+  --selection-emphasis-strength: 14%;
+  --color-diff-add-fg: #047857;
+  --color-diff-del-fg: #be123c;
+  --syntax-keyword: #0000ff;
+  --syntax-callable: #795e26;
+  --syntax-string: #a31515;
+  --syntax-type: #267f99;
+  --syntax-tag: #800000;
+  --syntax-number: #098658;
+  --syntax-comment: #008000;
+  --syntax-property: #001080;
+  --syntax-meta: #795e26;
+  --syntax-invalid: #cd3131;
+  color-scheme: light;
+}
+
+/* Blue/orange stays distinguishable for protanopia, deuteranopia and
+   tritanopia (same pairing as GitHub's colorblind themes). */
+html.diff-palette-colorblind {
+  --color-diff-add: #388bfd;
+  --color-diff-add-fg: #79c0ff;
+  --color-diff-del: #db6d28;
+  --color-diff-del-fg: #ffa657;
+}
+
+html.diff-palette-colorblind.theme-light {
+  --color-diff-add: #0969da;
+  --color-diff-add-fg: #0550ae;
+  --color-diff-del: #bc4c00;
+  --color-diff-del-fg: #953800;
+}
+
+/* Colorblind-safe hues with heavier tints and maximum-contrast text. */
+html.diff-palette-high-contrast {
+  --color-diff-add: #58a6ff;
+  --color-diff-add-fg: #cae8ff;
+  --color-diff-add-bg: color-mix(
+    in srgb,
+    var(--color-diff-add) 28%,
+    transparent
+  );
+  --color-diff-add-gutter: color-mix(
+    in srgb,
+    var(--color-diff-add) 45%,
+    transparent
+  );
+  --color-diff-del: #f0883e;
+  --color-diff-del-fg: #ffdfb6;
+  --color-diff-del-bg: color-mix(
+    in srgb,
+    var(--color-diff-del) 28%,
+    transparent
+  );
+  --color-diff-del-gutter: color-mix(
+    in srgb,
+    var(--color-diff-del) 45%,
+    transparent
+  );
+}
+
+html.diff-palette-high-contrast.theme-light {
+  --color-diff-add: #0550ae;
+  --color-diff-add-fg: #032563;
+  --color-diff-del: #953800;
+  --color-diff-del-fg: #471700;
+}
+
+html,
+body,
+#root {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: var(--color-background-base);
+  color: var(--color-content);
+  overflow: hidden;
+  overscroll-behavior: none;
+  user-select: none;
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+/* Linux/Windows: explicit sans. macOS keeps default text rendering. */
+html:not(.is-mac),
+html:not(.is-mac) body,
+html:not(.is-mac) #root {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Hide native scrollbars app-wide while preserving scrolling on both axes.
+   Custom editor and terminal scrollbars are separate elements. */
+* {
+  scrollbar-width: none;
+}
+
+::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Tint-less transparent rather than `transparent`, which browsers interpolate
+   through black and would dim the page on the way in and out of glass. */
+html.has-native-glass:not(.theme-light),
+html.has-native-glass:not(.theme-light) body,
+html.has-native-glass:not(.theme-light) #root {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
+}
+
+.reorder-item {
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+.reorder-item:is([data-dragging], [data-settling]) {
+  z-index: 10;
+}
+
+.tab-motion,
+.tab-motion > button {
+  transition:
+    background-color var(--motion-feedback-duration) var(--motion-ease-out),
+    color var(--motion-feedback-duration) var(--motion-ease-out),
+    opacity var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+.tab-motion[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
+.tab-closing,
+.tab-opening {
+  overflow: hidden;
+  flex-basis: auto;
+  flex-grow: 0;
+  width: var(--tab-slot-width, 14rem);
+  min-width: var(--tab-slot-min-width, 0);
+  margin-right: 0;
+  box-sizing: border-box;
+  transition:
+    width var(--motion-tab-close-duration) var(--motion-tab-ease-out),
+    min-width var(--motion-tab-close-duration) var(--motion-tab-ease-out),
+    margin-right var(--motion-tab-close-duration) var(--motion-tab-ease-out);
+}
+
+.tab-opening {
+  --tab-slot-min-width: 7rem;
+  flex-shrink: 1;
+}
+
+.tab-closing {
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.tab-closing[data-collapsed],
+.tab-opening[data-collapsed] {
+  width: 0;
+  min-width: 0;
+  margin-right: -0.125rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-motion,
+  .tab-motion > button {
+    transition: none;
+  }
+
+  .tab-closing,
+  .tab-opening {
+    transition: none;
+  }
+
+  .tab-closing {
+    display: none;
+  }
+}
+
+.workspace-tab:not([data-reordering])
+  > button:not([aria-selected="true"]):hover,
+.workspace-tab[data-dragging] > button:not([aria-selected="true"]),
+.project-reorder-item:not([data-reordering], [data-selected]):hover,
+.project-reorder-item[data-dragging]:not([data-selected]) {
+  background: color-mix(in srgb, var(--color-content) 5%, transparent);
+  color: var(--color-content);
+}
+
+/* Keep project controls from appearing as rows pass beneath the pointer. */
+.project-reorder-item[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
+.project-reorder-item[data-reordering] > button:first-of-type {
+  padding-right: 0;
+}
+
+.project-reorder-item[data-reordering] .project-card-logo {
+  opacity: 1;
+}
+
+.project-reorder-item[data-reordering] .project-card-stats {
+  display: flex;
+}
+
+.sidebar-glass {
+  background: color-mix(in srgb, var(--color-background-base) 90%, black);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+html.theme-light .sidebar-glass {
+  background: var(--color-background-base);
+}
+
+html.has-native-glass:not(.theme-light) .sidebar-glass {
+  background: hsl(
+    var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
+      var(--sidebar-opacity)
+  );
+}
+
+/* AppKit fills the shared tint as the window grows. Painting it here too
+   would compound the opacity; wait for the native host's acknowledgement. */
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .workspace-background,
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .sidebar-glass {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
+}
+
+/* The activity dot sits at (23px, 9px) in a 32px button. Its icon is
+   centered at (8px, 8px), so this cuts a 2px gap around the 6px dot. */
+.compact-rail-icon-with-dot {
+  -webkit-mask-image: radial-gradient(
+    circle at 15px 1px,
+    transparent 5px,
+    black 5.5px
+  );
+  mask-image: radial-gradient(circle at 15px 1px, transparent 5px, black 5.5px);
+}
+
+/* The same cut-out, for the Mono overview's 14px tab icons. */
+.overview-tab-icon-with-dot {
+  -webkit-mask-image: radial-gradient(
+    circle at 13px 1px,
+    transparent 4.5px,
+    black 5px
+  );
+  mask-image: radial-gradient(circle at 13px 1px, transparent 4.5px, black 5px);
+}
+
+.body-glass {
+  background: var(--color-background-base);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+/* Inset layout: the sidebar, tabs and footer sit on an outer layer around a
+   rounded card holding the workspace. Its surfaces ignore the translucency
+   settings. By default they are a neutral shell at 80% over the window blur
+   with a faint wash, and the content panel the deepest plane in dark mode,
+   white in light. A workspace
+   theme swaps the colours through the `--wt-*` variables. */
+html.layout-inset {
+  --inset-surface: var(--wt-dark-surface, #0d0d0d);
+  --inset-panel: var(--wt-dark-panel, #060606);
+  --inset-glass-alpha: 0.8;
+  --inset-panel-alpha: 0.4;
+  --inset-wash: hsl(0 0% 92% / 0.05);
+  /* The card's edge, and every rule inside it and the sidebar, so the
+     separators sit no brighter than the hairline around them. */
+  --inset-stroke: color-mix(in srgb, var(--color-content) 4%, transparent);
+}
+
+/* Keep the opaque pane close to the washed sidebar instead of near black. */
+html.layout-inset:not(.has-native-glass):not(.theme-light) {
+  --inset-panel: var(--wt-dark-panel-solid, #141414);
+}
+
+/* Light mode is opaque here, so the shell is its solid grey under the wash. */
+html.layout-inset.theme-light {
+  --inset-surface: var(--wt-light-surface, #f5f5f5);
+  --inset-panel: var(--wt-light-panel-solid, #ffffff);
+  --inset-wash: hsl(0 0% 10% / 0.01);
+}
+
+/* A workspace theme (workspaceThemes.ts) replaces the hue/saturation tint with
+   its own text, accent, markdown and code colours. Strokes and selections mix from
+   `--color-content`, so they follow. Menus and popovers sit on the shell. */
+html.layout-inset.has-workspace-theme {
+  --color-content: var(--wt-dark-content);
+  --color-background-base: var(--wt-dark-surface);
+  --color-accent: var(--wt-dark-accent);
+  --link-color: var(--wt-dark-link);
+  --color-markdown-heading: var(--wt-dark-heading);
+  --syntax-keyword: var(--wt-dark-syntax-keyword);
+  --syntax-callable: var(--wt-dark-syntax-callable);
+  --syntax-string: var(--wt-dark-syntax-string);
+  --syntax-type: var(--wt-dark-syntax-type);
+  --syntax-tag: var(--wt-dark-syntax-tag);
+  --syntax-number: var(--wt-dark-syntax-number);
+  --syntax-comment: var(--wt-dark-syntax-comment);
+  --syntax-property: var(--wt-dark-syntax-property);
+  --syntax-meta: var(--wt-dark-syntax-meta);
+  --syntax-invalid: var(--wt-dark-syntax-invalid);
+}
+
+html.layout-inset.has-workspace-theme.theme-light {
+  --color-content: var(--wt-light-content);
+  --color-background-base: var(--wt-light-surface);
+  --color-accent: var(--wt-light-accent);
+  --link-color: var(--wt-light-link);
+  --color-markdown-heading: var(--wt-light-heading);
+  --syntax-keyword: var(--wt-light-syntax-keyword);
+  --syntax-callable: var(--wt-light-syntax-callable);
+  --syntax-string: var(--wt-light-syntax-string);
+  --syntax-type: var(--wt-light-syntax-type);
+  --syntax-tag: var(--wt-light-syntax-tag);
+  --syntax-number: var(--wt-light-syntax-number);
+  --syntax-comment: var(--wt-light-syntax-comment);
+  --syntax-property: var(--wt-light-syntax-property);
+  --syntax-meta: var(--wt-light-syntax-meta);
+  --syntax-invalid: var(--wt-light-syntax-invalid);
+}
+
+.inset-outer {
+  background:
+    linear-gradient(var(--inset-wash), var(--inset-wash)), var(--inset-surface);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+html.has-native-glass:not(.theme-light) .inset-outer {
+  background:
+    linear-gradient(var(--inset-wash), var(--inset-wash)),
+    color-mix(
+      in srgb,
+      var(--inset-surface) calc(var(--inset-glass-alpha) * 100%),
+      transparent
+    );
+}
+
+/* AppKit already fills the shell colour across the window. */
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .inset-outer {
+  background: linear-gradient(var(--inset-wash), var(--inset-wash));
+}
+
+/* Outranks the theme and native-glass fills on `.sidebar-glass`. */
+html.layout-inset .inset-shell .inset-rail-host .sidebar-glass {
+  background: transparent;
+  border-right-color: transparent;
+}
+
+/* Without a rail beside it, the card keeps the same gutter on both sides,
+   and the footer's chips stay lined up with its edge. */
+.inset-shell:not(:has(.inset-rail-host > :not(.hidden))) .inset-card,
+.inset-shell:not(:has(.inset-rail-host > :not(.hidden))) .inset-footer {
+  margin-left: 0.375rem;
+}
+
+.inset-card {
+  /* A hairline, softer than the app's rules, so the card's edge doesn't cut. */
+  --color-stroke: var(--inset-stroke);
+  border-color: var(--inset-stroke);
+  background: var(--inset-panel);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+/* Over the glass the panel lets the blur through; the main pane glass
+   setting does not apply here. */
+html.has-native-glass:not(.theme-light) .inset-card {
+  background: color-mix(
+    in srgb,
+    var(--inset-panel) calc(var(--inset-panel-alpha) * 100%),
+    transparent
+  );
+  box-shadow: none;
+}
+
+/* WebKit otherwise paints the rounded translucent card into the transparent
+   root alongside the window chrome. Give the whole, stationary card its own
+   backing surface so hover and streaming repaints keep the same clip/tint. */
+html.is-mac.has-native-glass:not(.theme-light) .inset-card {
+  transform: translateZ(0);
+}
+
+/* A collapsed sidebar peeking out blurs the workspace under a faint wash,
+   with the rest of the window dimmed behind it. */
+.sidebar-peek {
+  border-color: color-mix(in srgb, var(--color-content) 8%, transparent);
+  background: linear-gradient(var(--inset-wash), var(--inset-wash));
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  box-shadow:
+    0 12px 32px rgb(0 0 0 / 0.28),
+    0 2px 6px rgb(0 0 0 / 0.16);
+}
+
+html.theme-light .sidebar-peek {
+  background:
+    linear-gradient(var(--inset-wash), var(--inset-wash)), var(--inset-surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.sidebar-peek-backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+html.theme-light .sidebar-peek-backdrop {
+  background: rgb(0 0 0 / 0.18);
+}
+
+/* Lighter rules in the sidebar, so they read as hairlines over the card's
+   glass rather than solid bars. */
+.inset-sidebar {
+  --color-stroke: var(--inset-stroke);
+}
+
+/* Dim inactive tabs together so their plate, label and icons recede. */
+[data-inset-title-bar] [data-title-tab]:not([data-title-tab-active]) {
+  background: color-mix(in srgb, var(--color-content) 4%, transparent);
+  opacity: 0.65;
+}
+
+[data-inset-title-bar] [data-title-tab]:not([data-title-tab-active]):hover,
+[data-inset-title-bar] [data-title-tab]:not([data-title-tab-active]):focus-visible {
+  background: color-mix(in srgb, var(--color-content) 7%, transparent);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  body,
+  #root,
+  .sidebar-glass,
+  .inset-outer,
+  .inset-card,
+  .body-glass {
+    transition: none;
+  }
+}
+
+.chat-pane-background::before {
+  content: "";
+  position: absolute;
+  left: var(--chat-background-left, 0);
+  top: var(--chat-background-top, 0);
+  width: var(--chat-background-width, 100%);
+  height: var(--chat-background-height, 100%);
+  z-index: -1;
+  background-image: var(--chat-background-image, none);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  -webkit-mask-image: var(--chat-background-image-fade-mask);
+  mask-image: var(--chat-background-image-fade-mask);
+  opacity: 0;
+  transition: opacity var(--motion-feedback-duration) var(--motion-ease-out);
+  pointer-events: none;
+}
+
+.chat-pane-background[data-session-empty="false"]::before {
+  -webkit-mask-image: var(--chat-background-image-session-fade-mask);
+  mask-image: var(--chat-background-image-session-fade-mask);
+}
+
+.chat-background-fade {
+  -webkit-mask-image: var(--chat-background-image-fade-mask);
+  mask-image: var(--chat-background-image-fade-mask);
+}
+
+/* Each masked copy samples the same artwork; only the image is blurred. */
+.gradient-blur-background {
+  --gradient-blur-soft: 7px;
+  --gradient-blur-strong: 18px;
+  --gradient-blur-soft-mask: linear-gradient(
+    to bottom,
+    transparent 18%,
+    #000 60%
+  );
+  --gradient-blur-strong-mask: linear-gradient(
+    to bottom,
+    transparent 28%,
+    #000 76%
+  );
+  --gradient-blur-overlay: linear-gradient(
+    to bottom,
+    transparent 16%,
+    color-mix(in srgb, var(--color-background-base) 26%, transparent) 38%,
+    color-mix(in srgb, var(--color-background-base) 55%, transparent) 55%,
+    color-mix(in srgb, var(--color-background-base) 78%, transparent) 75%
+  );
+  --gradient-blur-mask: var(--chat-background-fade-mask);
+  overflow: hidden;
+  pointer-events: none;
+  background-image: var(--chat-background-image, none);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  -webkit-mask-image: var(--gradient-blur-mask);
+  mask-image: var(--gradient-blur-mask);
+}
+
+.gradient-blur-preview {
+  --gradient-blur-soft: 2px;
+  --gradient-blur-strong: 5px;
+}
+
+.gradient-blur-background > span {
+  position: absolute;
+  inset: 0;
+  background-image: var(--chat-background-image, none);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.gradient-blur-background-soft {
+  filter: blur(var(--gradient-blur-soft));
+  -webkit-mask-image: var(--gradient-blur-soft-mask);
+  mask-image: var(--gradient-blur-soft-mask);
+}
+
+.gradient-blur-background-strong {
+  filter: blur(var(--gradient-blur-strong));
+  -webkit-mask-image: var(--gradient-blur-strong-mask);
+  mask-image: var(--gradient-blur-strong-mask);
+}
+
+.gradient-blur-background::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--color-background-base) 36%, transparent) 0 1px,
+      transparent 1px 3px
+    ),
+    var(--gradient-blur-overlay);
+}
+
+.chat-pane-background > .gradient-blur-background {
+  display: none;
+  position: absolute;
+  left: var(--chat-background-left, 0);
+  top: var(--chat-background-top, 0);
+  width: var(--chat-background-width, 100%);
+  height: var(--chat-background-height, 100%);
+  z-index: -1;
+  opacity: 0;
+  transition: opacity var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+/* Keep the active transcript clear of the wide blurred haze used by the empty hero. */
+.chat-pane-background[data-session-empty="false"] > .gradient-blur-background {
+  --gradient-blur-soft: 5px;
+  --gradient-blur-strong: 12px;
+  --gradient-blur-soft-mask: linear-gradient(
+    to bottom,
+    transparent 18%,
+    #000 70%
+  );
+  --gradient-blur-strong-mask: linear-gradient(
+    to bottom,
+    transparent 22%,
+    #000 76%
+  );
+  --gradient-blur-overlay: linear-gradient(
+    to bottom,
+    transparent 15%,
+    color-mix(in srgb, var(--color-background-base) 70%, transparent) 76%
+  );
+  --gradient-blur-mask: var(--chat-background-session-fade-mask);
+}
+
+html.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"]
+  > .gradient-blur-background {
+  display: block;
+}
+
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"]
+  > .gradient-blur-background {
+  opacity: var(--chat-background-empty-opacity);
+}
+
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"][data-session-empty="false"]
+  > .gradient-blur-background {
+  opacity: var(--chat-background-session-opacity);
+}
+
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  )
+  .chat-pane-background[data-project-chat-background="false"]::before,
+.chat-pane-background[data-project-chat-background="true"]:not(
+    [data-project-background-effect="gradient-blur"]
+  )::before {
+  opacity: var(--chat-background-empty-opacity);
+}
+
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  )
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]::before,
+.chat-pane-background[data-project-chat-background="true"]:not(
+    [data-project-background-effect="gradient-blur"]
+  )[data-session-empty="false"]::before {
+  opacity: var(--chat-background-session-opacity);
+}
+
+/*
+ * Sending the first message eases the background into its session look (or
+ * out entirely when it only shows on empty sessions) alongside the composer.
+ */
+.chat-pane-background[data-session-empty="false"]::before {
+  transition-duration: 600ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane-background::before,
+  .chat-pane-background[data-session-empty="false"]::before {
+    transition-duration: 0ms;
+  }
+}
+
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  ).chat-background-empty-only
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]::before,
+.chat-pane-background[data-project-chat-background="true"][data-project-background-scope="empty"][data-session-empty="false"]::before {
+  opacity: 0;
+}
+
+/* Scope and visibility follow the same rules as the existing image layer. */
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur.chat-background-empty-only
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-scope="empty"][data-session-empty="false"]
+  > .gradient-blur-background {
+  opacity: 0;
+}
+
+.chat-pane-background[data-session-empty="false"] > .gradient-blur-background {
+  transition-duration: 600ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane-background > .gradient-blur-background {
+    transition-duration: 0ms;
+  }
+}
+
+/* History is paged by turn. Lay out each loaded page at its real height:
+   estimated offscreen heights change the scroll range during a gesture and
+   require scrollTop corrections as the reader moves back through history. */
+.transcript-turn {
+  content-visibility: visible;
+}
+
+/* Heights come from this exact turn at the current pane width. The live turn
+   always keeps its natural layout, including throughout completion. */
+.transcript-turn[data-history-height] {
+  flex-shrink: 0;
+}
+
+::highlight(mailport-transcript-search-match) {
+  background-color: color-mix(in srgb, #e2c08d 46%, transparent);
+}
+
+::highlight(mailport-transcript-search-current) {
+  background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
+}
+
+/* Match the Mono transcript's soft edge fade on overflowing tab text. */
+.tab-label[data-overflow="true"] {
+  --tab-label-mask: linear-gradient(
+    to right,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--tab-label-mask);
+  mask-image: var(--tab-label-mask);
+}
+
+/* Fade scrolling content at the bottom viewport edge. */
+.sidebar-session-scroll,
+.transcript-composer-fade .agent-transcript {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--scroll-bottom-mask);
+  mask-image: var(--scroll-bottom-mask);
+}
+
+/* In the inset sidebar, rows scrolled up under the project header fade out
+   too; at rest the list starts crisp. Use the viewport mask alone, without
+   a sticky backdrop filter sampling the native glass through another mask. */
+.inset-sidebar .sidebar-session-scroll[data-scrolled] {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 1.75rem,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+}
+
+/* The transcript fades under the top edge too, like the composer's fade at
+   the bottom. */
+.transcript-composer-fade .agent-transcript {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 1.5rem,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  /* A message scrolled to lands where the first one rests, below the fade.
+     The prompt outline reads this too. */
+  scroll-padding-top: 1.25rem;
+}
+
+/* Let the latest reply scroll fully clear of the composer's fade, and the
+   first message rest below the top one. */
+.transcript-composer-fade [data-transcript-content] {
+  padding-top: 1.25rem;
+  padding-bottom: 2.5rem;
+}
+
+.mono-transcript-fades {
+  --mono-transcript-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 1.5rem,
+    #000 calc(100% - 2rem),
+    transparent
+  );
+  -webkit-mask-image: var(--mono-transcript-mask);
+  mask-image: var(--mono-transcript-mask);
+}
+
+.agent-transcript
+  [data-transcript-search-current="true"]
+  .user-message-bubble
+  pre.line-clamp-4 {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+/* Touch layouts keep actions in flow. Desktop places them in the existing
+ * turn gap so revealing the controls never shifts or over-spaces the chat. */
+.user-message-actions {
+  width: fit-content;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .user-message-hover-zone {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .user-message-actions {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .user-message-row:hover .user-message-actions,
+  .user-message-row:focus-within .user-message-actions {
+    opacity: 1;
+  }
+}
+
+/* A Mono's turn keeps its actions the way a sent message does: in a fixed
+ * gap under the turn, shown on hover, so revealing them shifts nothing. One
+ * whose panel is open stays visible. */
+@media (hover: hover) and (pointer: fine) {
+  /* Leave breathing room above the buttons. Keep the gap while a
+   * completion report reopens the same turn and its
+   * actions are temporarily absent. Shrinking it makes the chat dip first. */
+  .transcript-turn-mono {
+    position: relative;
+    padding-bottom: 1.5rem;
+  }
+
+  .turn-actions-hover {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    z-index: 1;
+    height: 1.5rem;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  /* The reply's actions answer to the reply: hovering the prompt above it,
+   * whose own actions show then, or its day stamp, leaves them hidden. */
+  .transcript-turn:hover:not(
+      :has([data-prompt-anchor]:hover, [data-day-separator]:hover)
+    )
+    > .turn-actions-hover,
+  .turn-actions-hover:focus-within,
+  .turn-actions-hover:has([aria-expanded="true"]) {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-message-actions,
+  .turn-actions-hover {
+    transition: none;
+  }
+}
+
+.user-message-with-link {
+  display: block;
+}
+
+html.has-user-accent .user-message-bubble {
+  background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
+  border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
+}
+
+/*
+ * A freshly sent /operator turn lights up once: the bubble blooms with a warm
+ * halo, a golden sheen sweeps across it, and sparkles drift up from a glow at
+ * its base, twinkling as they rise and fading out past the top edge.
+ */
+.mailport-sparkles {
+  --sparkle-color: #fde68a;
+  --sparkle-glow: rgb(251 191 36 / 0.9);
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: mailport-halo 2400ms 150ms ease-out both;
+}
+
+html.theme-light .mailport-sparkles {
+  --sparkle-color: #f59e0b;
+  --sparkle-glow: rgb(217 119 6 / 0.55);
+}
+
+.mailport-sparkles::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgb(254 243 199 / 0.5) 48%,
+    rgb(251 191 36 / 0.35) 52%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  animation: mailport-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.mailport-sparkles::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    120% 70% at 50% 100%,
+    rgb(251 191 36 / 0.35),
+    transparent 70%
+  );
+  animation: mailport-ember-glow 2200ms 100ms ease-out both;
+}
+
+.mailport-sparkle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 1;
+  width: 0;
+  animation: mailport-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.mailport-sparkle-glyph {
+  position: absolute;
+  bottom: calc(var(--size) * -1);
+  left: calc(var(--size) / -2);
+  width: var(--size);
+  height: var(--size);
+  color: var(--sparkle-color);
+  filter: drop-shadow(0 0 3px var(--sparkle-glow));
+  animation: mailport-twinkle var(--duration) var(--delay) ease-in-out both;
+}
+
+.mailport-sparkle-ember {
+  border-radius: 9999px;
+  background: radial-gradient(circle, #fffbeb, var(--sparkle-color) 70%);
+}
+
+@keyframes mailport-rise {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(var(--drift), calc(-100% - 6px));
+  }
+}
+
+@keyframes mailport-twinkle {
+  0% {
+    opacity: 0;
+    transform: scale(0.2) rotate(0deg);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1) rotate(calc(var(--spin) * 0.3));
+  }
+  42% {
+    opacity: 0.75;
+    transform: scale(0.65) rotate(calc(var(--spin) * 0.5));
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.1) rotate(calc(var(--spin) * 0.7));
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.3) rotate(var(--spin));
+  }
+}
+
+@keyframes mailport-halo {
+  0% {
+    box-shadow:
+      0 0 0 0 rgb(245 158 11 / 0),
+      0 0 0 0 rgb(245 158 11 / 0);
+  }
+  25% {
+    box-shadow:
+      0 0 0 1px rgb(245 158 11 / 0.55),
+      0 0 24px 3px rgb(245 158 11 / 0.35);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 rgb(245 158 11 / 0),
+      0 0 0 0 rgb(245 158 11 / 0);
+  }
+}
+
+@keyframes mailport-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes mailport-ember-glow {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mailport-sparkles {
+    display: none;
+  }
+}
+
+/*
+ * Plan and Orchestrator turns share the /operator bloom and upward exit.
+ * Numbered plan marks and a small agent network keep their own shapes and
+ * colors as they travel from the bottom of the bubble past its top edge.
+ */
+.plan-steps,
+.orchestrator-constellation {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: turn-mode-halo 2400ms 150ms ease-out both;
+}
+
+.plan-steps::before,
+.orchestrator-constellation::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, var(--mode-color) 32%, transparent) 48%,
+    color-mix(in srgb, var(--mode-glow) 28%, transparent) 52%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+}
+
+.plan-steps::after,
+.orchestrator-constellation::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    120% 70% at 50% 100%,
+    color-mix(in srgb, var(--mode-glow) 35%, transparent),
+    transparent 70%
+  );
+  animation: mailport-ember-glow 2200ms 100ms ease-out both;
+}
+
+@keyframes turn-mode-halo {
+  0% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+  25% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--mode-glow) 60%, transparent),
+      0 0 24px 3px color-mix(in srgb, var(--mode-glow) 38%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+}
+
+@keyframes turn-mode-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+.plan-steps {
+  --mode-color: #fde047;
+  --mode-glow: rgb(250 204 21 / 0.85);
+  --mode-ink: #422006;
+}
+
+html.theme-light .plan-steps {
+  --mode-color: #ca8a04;
+  --mode-glow: rgb(202 138 4 / 0.55);
+  --mode-ink: #fff;
+}
+
+.plan-steps::before {
+  animation: turn-mode-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.plan-step {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 2;
+  width: 0;
+  animation: mailport-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.plan-step-dot {
+  position: absolute;
+  bottom: -16px;
+  left: -8px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--mode-color);
+  border-radius: 9999px;
+  color: var(--mode-color);
+  font-size: 8.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  box-shadow: 0 0 8px var(--mode-glow);
+  animation: plan-step-dot var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-number,
+.plan-step-check {
+  grid-area: 1 / 1;
+}
+
+.plan-step-number {
+  animation: plan-step-number var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-check {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: var(--mode-ink);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 10;
+  animation: plan-step-check var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-ember {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 1;
+  width: 0;
+  animation: mailport-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.plan-step-ember-glyph {
+  --spin: 0deg;
+  position: absolute;
+  bottom: calc(var(--size) * -1);
+  left: calc(var(--size) / -2);
+  width: var(--size);
+  height: var(--size);
+  border-radius: 9999px;
+  background: radial-gradient(circle, #fefce8, var(--mode-color) 70%);
+  box-shadow: 0 0 5px var(--mode-glow);
+  animation: mailport-twinkle var(--duration) var(--delay) ease-in-out both;
+}
+
+@keyframes plan-step-dot {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+    background: color-mix(in srgb, var(--mode-color) 12%, transparent);
+  }
+  10% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+  20%,
+  38% {
+    transform: scale(1);
+  }
+  34% {
+    background: color-mix(in srgb, var(--mode-color) 12%, transparent);
+  }
+  44% {
+    transform: scale(1.14);
+    background: var(--mode-color);
+  }
+  52% {
+    transform: scale(1);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.8);
+    background: var(--mode-color);
+  }
+}
+
+@keyframes plan-step-number {
+  0%,
+  34% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  42%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+
+@keyframes plan-step-check {
+  0%,
+  36% {
+    opacity: 0;
+    stroke-dashoffset: 10;
+  }
+  50%,
+  100% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+.orchestrator-constellation {
+  --mode-color: #f0abfc;
+  --mode-glow: rgb(232 121 249 / 0.85);
+  --mode-spark: #fdf4ff;
+}
+
+html.theme-light .orchestrator-constellation {
+  --mode-color: #c026d3;
+  --mode-glow: rgb(192 38 211 / 0.5);
+  --mode-spark: #f5d0fe;
+}
+
+.orchestrator-constellation::before {
+  animation: turn-mode-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.orchestrator-network {
+  position: absolute;
+  inset: 0;
+  animation: orchestrator-network-rise 2200ms 300ms
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.orchestrator-edges {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: visible;
+}
+
+.orchestrator-edge,
+.orchestrator-pulse {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.orchestrator-edge {
+  stroke: color-mix(in srgb, var(--mode-color) 60%, transparent);
+  stroke-width: 1.25;
+  stroke-dasharray: var(--length);
+  animation: orchestrator-edge-draw var(--draw) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+/* A bright head rides the tip of each edge as it draws out. */
+.orchestrator-pulse {
+  stroke: var(--mode-spark);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 var(--length);
+  filter: drop-shadow(0 0 3px var(--mode-glow));
+  animation: orchestrator-pulse var(--draw) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.orchestrator-hub,
+.orchestrator-node {
+  position: absolute;
+  z-index: 2;
+  width: var(--size);
+  height: var(--size);
+  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
+  border-radius: 9999px;
+  background: radial-gradient(circle, var(--mode-spark), var(--mode-color) 70%);
+  box-shadow: 0 0 8px var(--mode-glow);
+}
+
+.orchestrator-hub::after,
+.orchestrator-node::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid var(--mode-color);
+  border-radius: inherit;
+  opacity: 0;
+}
+
+.orchestrator-hub {
+  --size: 8px;
+  animation: orchestrator-hub 600ms 120ms ease-out both;
+}
+
+.orchestrator-hub::after {
+  animation: orchestrator-ring 700ms 220ms ease-out both;
+}
+
+.orchestrator-node {
+  --size: 6px;
+  animation: orchestrator-node 600ms var(--delay) ease-out both;
+}
+
+.orchestrator-node[data-child="true"] {
+  --size: 4.5px;
+}
+
+.orchestrator-node::after {
+  animation: orchestrator-ring 500ms var(--delay) ease-out both;
+}
+
+@keyframes orchestrator-edge-draw {
+  from {
+    stroke-dashoffset: var(--length);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes orchestrator-network-rise {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(calc(-100% - 12px));
+  }
+}
+
+@keyframes orchestrator-pulse {
+  0% {
+    opacity: 1;
+    stroke-dashoffset: 6;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    stroke-dashoffset: calc(var(--length) * -1);
+  }
+}
+
+@keyframes orchestrator-hub {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.35);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes orchestrator-node {
+  0% {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.4);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes orchestrator-ring {
+  0% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(3.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-steps,
+  .orchestrator-constellation {
+    display: none;
+  }
+}
+
+.edit-last-turn-composer {
+  border-style: dashed;
+  border-color: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 32%,
+    transparent
+  );
+}
+
+.edit-last-turn-bubble {
+  outline: 1px dashed
+    color-mix(
+      in srgb,
+      var(--user-accent-color, var(--color-accent)) 45%,
+      transparent
+    );
+  outline-offset: 1px;
+}
+
+.edit-last-turn-button {
+  color: var(--user-accent-color, var(--color-accent));
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 10%,
+    transparent
+  );
+}
+
+.user-message-bubble[data-draft="true"] {
+  background: color-mix(in srgb, var(--color-content) 4%, transparent);
+}
+
+html.has-user-accent .user-message-bubble[data-draft="true"] {
+  background: color-mix(in srgb, var(--user-accent-color) 8%, transparent);
+  border-color: color-mix(in srgb, var(--user-accent-color) 38%, transparent);
+}
+
+.user-link-preview {
+  display: inline;
+  white-space: normal;
+}
+
+.user-link-preview-title {
+  display: inline;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * After a send, the live turn fills the transcript viewport so the prompt sits
+ * at the top, then follows the reply when it outgrows the viewport. A pooled
+ * transcript keeps this spacing across tab switches, including after a run ends.
+ */
+.transcript-turn-anchor {
+  min-height: var(--transcript-viewport, 0px);
+}
+
+/* A finished run can still be revealing its reply. Artifacts and actions wait
+   for the final word's fade, using the reply's actual animation state. */
+.transcript-turn:has([data-artifact-results]):has(.word-fading)
+  > [data-history-content]
+  > :is([data-artifact-results], [data-turn-actions]) {
+  display: none;
+}
+/* Session cards wait for the reply above them to finish its reveal; cards
+   above a later reply, such as a report back, stay where they are. */
+.transcript-turn
+  > [data-history-content]
+  > :has(.word-fading)
+  ~ [data-launched-sessions] {
+  display: none;
+}
+
+/* While a sent prompt rises into place, the rest of its turn waits for it. */
+.transcript-turn[data-prompt-rise="rising"]
+  > [data-history-content]
+  > :not(:has([data-prompt-anchor])) {
+  opacity: 0;
+}
+
+.transcript-turn[data-prompt-rise="revealing"]
+  > [data-history-content]
+  > :not(:has([data-prompt-anchor])) {
+  animation: prompt-turn-reveal 320ms var(--motion-ease-out) both;
+}
+
+@keyframes prompt-turn-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+html.has-native-glass.glass-body:not(.theme-light) .body-glass {
+  background: color-mix(
+    in srgb,
+    var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
+    transparent
+  );
+}
+
+html.is-mac.has-native-glass.has-native-glass-tint.glass-body:not(.theme-light)
+  .body-glass {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
+}

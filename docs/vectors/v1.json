@@ -1,0 +1,40 @@
+{
+  "warning": "PUBLIC SYNTHETIC TEST DATA. Never reuse this salt or nonce for production encryption.",
+  "password": "MailPort public test vector only",
+  "accounts": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "email": "vector@example.com",
+      "displayName": "MailPort vector",
+      "incoming": {
+        "host": "imap.example.com",
+        "port": 993,
+        "security": "tls",
+        "username": "vector@example.com",
+        "auth": {
+          "type": "password",
+          "password": "PUBLIC-FAKE-PASSWORD"
+        }
+      },
+      "outgoing": {
+        "host": "smtp.example.com",
+        "port": 587,
+        "security": "starttls",
+        "username": "vector@example.com",
+        "auth": {
+          "type": "oauth",
+          "providerId": "example-provider"
+        }
+      }
+    }
+  ],
+  "envelope": {
+    "format": "mailport-vault",
+    "version": 1,
+    "suite": "scrypt-n32768-r8-p1-aes256gcm",
+    "salt": "AAECAwQFBgcICQoLDA0ODw==",
+    "nonce": "EBESExQVFhcYGRob",
+    "ciphertext": "5Qd1/bp2clPY+qZo1CFpYK3a+GMd4Bxy4hGScKRaYVZQPOajRLfSwsrcBvjYaoBIavyT9u/dcBmQZo2S2m7TLtmdpe6IqAwzRHZYdfR2m48d78ZPZTcPiGRMBbGjR8yq+EybzpCvE3dpJb9x6ktQBexeBqAooG8/OEwHyTOQEOqwDTeI8ObM42CipSQqJ541/PVGUL/N9DqlgtI9bAP7cweLsFQW6amKocZaS3glFlf08vkVyoZWpsbRMElDrfJXfOInkEmUoWn9wOMCUXV7Ub7UUC4zbSRwx+ZwephlbHUwxVq9mxCLso3dUhGa+Qo+tSNY5rrIU615NrnlL5jkAZpJTziFpqYxpyYodeS4G0BR6a+wXcWr8uo0dGbT9fTyo9F2ukoq8pQf+JVgvkU2v3ttqHeuxkhBPaITLL2ecNye+hHEsr90YBzn9LkG2Jjlh79N1/6toU9ZHai9PmT5gkdsNWAFyofNiH4NKSU2CU2OJejf8xeEQef0He0HSF9l83q9qU7vdDw1f+ppjrrKRorZbsib/UgrCYr1PqqGW1taDstL4wm/I7kVvFlhfg/hW8bzUJGNc59Z",
+    "tag": "1ntJ5cmTK4gZTjIMZcQesw=="
+  }
+}
