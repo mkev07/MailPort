@@ -14,9 +14,11 @@
     "windows": [
       {
         "label": "main",
+        "dragDropEnabled": false,
         "title": "MailPort Vault",
-        "width": 1180,
-        "height": 780,
+        "width": 1500,
+        "height": 1020,
+        "center": true,
         "minWidth": 700,
         "minHeight": 560,
         "titleBarStyle": "Overlay",
@@ -28,8 +30,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost https://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'none'",
-      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost https://ipc.localhost http://localhost:1491 ws://localhost:1491; object-src 'none'; base-uri 'self'; form-action 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://www.gravatar.com; font-src 'self'; connect-src ipc: http://ipc.localhost https://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://www.gravatar.com; font-src 'self'; connect-src ipc: http://ipc.localhost https://ipc.localhost http://localhost:1491 ws://localhost:1491; object-src 'none'; base-uri 'self'; form-action 'none'"
     }
   },
   "bundle": {

@@ -69,7 +69,7 @@
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
   --font-sans:
-    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    "Allo", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
     Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
   /* Diff colors. `diff-add`/`diff-del` are the solid marker hues, `-fg` is
      readable text on the theme background, `-bg`/`-gutter` are row tints.
@@ -143,8 +143,8 @@
   --theme-hue: 240;
   --theme-saturation: 0%;
   --theme-dark-lightness: 9%;
-  --sidebar-opacity: 0.85;
-  --window-background-opacity: 0.4;
+  --sidebar-opacity: 0.60;
+  --window-background-opacity: 0.24;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
   /* The Haze fades its artwork out toward the composer. */

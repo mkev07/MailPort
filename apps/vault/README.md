@@ -55,6 +55,47 @@ and nonce. File transfers are not recipient-bound or replay-resistant and are
 not the planned authenticated direct app-to-app protocol. Whoever holds a package
 and its password can retain the included credentials.
 
+## Adding an account
+
+Enter the email address first. MailPort checks built-in provider settings, IMAP
+and SMTP submission DNS SRV records, and MX records for recognized hosting
+providers. It can also read HTTPS autoconfiguration from the domain or the
+Thunderbird provider directory. These lookups use only the domain. MailPort
+does not contact the mail servers during setup. Domains without usable
+settings can be configured manually.
+
+By default both servers use the email address and one password or OAuth
+provider. Open **Server settings** to change the ports, enter a shared
+username, or configure separate logins. New accounts reuse the incoming hostname
+for SMTP by default. Discovery can supply a separate SMTP hostname.
+OAuth accounts still require sign-in through the receiving email client.
+
+## Profiles
+
+Use **Add profile** in the sidebar to create a group. Open an account and
+choose its **Profile** to move it between groups. New accounts created while
+viewing a profile join that profile. The vault encrypts profile names, avatars,
+and assignments alongside accounts. Export packages contain only the selected
+accounts and keep the same transfer format.
+
+## Quick unlock on macOS
+
+Open **Unlock settings** after unlocking with your master passphrase. Touch ID
+stores a copy of the passphrase in the Mac’s Data Protection Keychain. The item
+is device-only and requires a fingerprint from the current enrolled set.
+Turning the option off removes the Keychain item. If enrollment changes, unlock
+with the passphrase and set up Touch ID again.
+
+An ad hoc build cannot use the Data Protection Keychain. Touch ID acceptance
+requires a signed and provisioned build with access to the app's Keychain group.
+The app reports the Keychain error and keeps passphrase unlock available.
+
+For 1Password, install its CLI, enable desktop app integration in 1Password
+and copy the secret reference for the field holding your master passphrase.
+MailPort verifies the field before saving the reference. The password remains
+in 1Password and passes to the native vault backend only when requested.
+If the CLI has multiple accounts, configure its default account for the vault.
+
 ## Manual acceptance with synthetic data
 
 1. Create a vault with a disposable test passphrase (at least 12 characters).

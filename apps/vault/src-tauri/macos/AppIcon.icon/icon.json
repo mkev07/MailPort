@@ -1,21 +1,25 @@
 {
-  "fill" : {
-    "solid" : "extended-srgb:0.00000,0.00000,0.00000,1.00000"
-  },
+  "fill-specializations" : [
+    {
+      "value" : "system-light"
+    },
+    {
+      "appearance" : "dark",
+      "value" : "system-dark"
+    }
+  ],
   "groups" : [
     {
       "layers" : [
         {
-          "blend-mode" : "normal",
-          "fill" : "none",
-          "glass" : false,
-          "hidden" : false,
-          "image-name" : "icon.png",
-          "name" : "icon",
-          "opacity" : 1,
+          "image-name" : "mailport-icon.png",
+          "name" : "mailport-icon",
           "position" : {
-            "scale" : 1,
-            "translation-in-points" : [0, 0]
+            "scale" : 0.7,
+            "translation-in-points" : [
+              0,
+              0
+            ]
           }
         }
       ],
@@ -24,13 +28,15 @@
         "opacity" : 0.5
       },
       "translucency" : {
-        "enabled" : false,
-        "value" : 0.5
+        "enabled" : true,
+        "value" : 0.3
       }
     }
   ],
   "supported-platforms" : {
-    "circles" : ["watchOS"],
+    "circles" : [
+      "watchOS"
+    ],
     "squares" : "shared"
   }
 }

@@ -23,3 +23,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Allo
+
+Allo 1.0.3 by Josh Puckett, derived from Inter by Rasmus Andersson.
+Source: https://github.com/joshpuckett/allo
+
+The font is bundled locally through the `allo-font` package and remains licensed
+under SIL Open Font License 1.1. See licenses/Allo-OFL.txt. MailPort application
+code remains MIT licensed.
+
+## Sonner
+
+MailPort uses [Sonner](https://github.com/emilkowalski/sonner) under the MIT
+license. See [the license](licenses/sonner.txt).

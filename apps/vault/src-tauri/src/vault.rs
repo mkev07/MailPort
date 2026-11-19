@@ -1,8 +1,15 @@
+use crate::{
+    profiles::{Profile, Profiles},
+    quick_unlock,
+};
 use mailport_core::{Account, Auth};
 use serde::Serialize;
 use std::{
     path::PathBuf,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
@@ -13,12 +20,17 @@ type Result<T> = std::result::Result<T, String>;
 const IDLE_LIMIT: Duration = Duration::from_secs(5 * 60);
 pub struct Session {
     accounts: Vec<Account>,
+    profiles: Profiles,
     password: Zeroizing<String>,
     touched: Instant,
 }
 pub struct VaultState {
     pub path: PathBuf,
     pub session: Mutex<Option<Session>>,
+    quick_preferences: Mutex<quick_unlock::Preferences>,
+    quick_operation: Mutex<()>,
+    touch_id_available: bool,
+    lock_generation: AtomicU64,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,19 +41,28 @@ pub struct Summary {
     incoming_host: String,
     outgoing_host: String,
     requires_sign_in: bool,
+    profile_id: Option<String>,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Status {
     exists: bool,
     unlocked: bool,
     accounts: Vec<Summary>,
+    profiles: Vec<Profile>,
+    touch_id_available: bool,
+    touch_id_enabled: bool,
+    one_password_available: bool,
+    one_password_enabled: bool,
 }
-fn summaries(accounts: &[Account]) -> Vec<Summary> {
-    accounts
+fn summaries(session: &Session) -> Vec<Summary> {
+    session
+        .accounts
         .iter()
         .map(|a| Summary {
             id: a.id.clone(),
             email: a.email.clone(),
+            profile_id: session.profiles.assignments.get(&a.id).cloned(),
             display_name: a.display_name.clone(),
             incoming_host: a.incoming.host.clone(),
             outgoing_host: a.outgoing.host.clone(),
@@ -77,16 +98,32 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
         .map_err(|_| "The operation could not finish. Try again.".to_owned())?
 }
 #[tauri::command]
+pub fn vault_session_active(state: tauri::State<VaultState>) -> Result<bool> {
+    let mut session = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+    expire(&mut session);
+    Ok(session.is_some())
+}
+
+#[tauri::command]
 pub fn vault_status(state: tauri::State<VaultState>) -> Result<Status> {
     let mut session = state.session.lock().map_err(|_| "Vault is unavailable.")?;
     expire(&mut session);
+    let preferences = state
+        .quick_preferences
+        .lock()
+        .map_err(|_| "Unlock settings are unavailable.")?;
     Ok(Status {
         exists: state.path.exists(),
         unlocked: session.is_some(),
-        accounts: session
+        touch_id_available: state.touch_id_available,
+        touch_id_enabled: preferences.touch_id,
+        one_password_available: quick_unlock::one_password_available(),
+        one_password_enabled: preferences.one_password.is_some(),
+        profiles: session
             .as_ref()
-            .map(|s| summaries(&s.accounts))
+            .map(|s| s.profiles.items.clone())
             .unwrap_or_default(),
+        accounts: session.as_ref().map(summaries).unwrap_or_default(),
     })
 }
 #[tauri::command]
@@ -98,10 +135,12 @@ pub async fn vault_create(app: AppHandle, password: String) -> Result<()> {
         if state.path.exists() {
             return Err("A vault already exists. Unlock it instead.".into());
         }
-        let encrypted = mailport_core::seal(&[], &password)?;
+        let profiles = Profiles::default();
+        let encrypted = mailport_core::seal_local(&[], &profiles, &password)?;
         mailport_core::write_new_encrypted(&state.path, &encrypted)?;
         *guard = Some(Session {
             accounts: vec![],
+            profiles,
             password,
             touched: Instant::now(),
         });
@@ -115,10 +154,11 @@ pub async fn vault_unlock(app: AppHandle, password: String) -> Result<()> {
     blocking(move || {
         let state = app.state::<VaultState>();
         let mut guard = state.session.lock().map_err(|_| "Vault is unavailable.")?;
-        let accounts =
-            mailport_core::unlock(&mailport_core::read_encrypted(&state.path)?, &password)?;
+        let (accounts, profiles) =
+            mailport_core::unlock_local(&mailport_core::read_encrypted(&state.path)?, &password)?;
         *guard = Some(Session {
             accounts,
+            profiles,
             password,
             touched: Instant::now(),
         });
@@ -126,9 +166,137 @@ pub async fn vault_unlock(app: AppHandle, password: String) -> Result<()> {
     })
     .await
 }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QuickMethod {
+    TouchId,
+    OnePassword,
+}
+
+#[tauri::command]
+pub async fn vault_quick_unlock(app: AppHandle, method: QuickMethod) -> Result<()> {
+    blocking(move || {
+        let state = app.state::<VaultState>();
+        let _operation = state
+            .quick_operation
+            .try_lock()
+            .map_err(|_| "An unlock request is already in progress.")?;
+        let generation = state.lock_generation.load(Ordering::Relaxed);
+        let (touch_id, reference) = {
+            let preferences = state
+                .quick_preferences
+                .lock()
+                .map_err(|_| "Unlock settings are unavailable.")?;
+            (preferences.touch_id, preferences.one_password.clone())
+        };
+        let password = match method {
+            QuickMethod::TouchId if touch_id => quick_unlock::read_touch_id()?,
+            QuickMethod::OnePassword => quick_unlock::read_one_password(
+                reference
+                    .as_deref()
+                    .ok_or("Set up 1Password unlock first.")?,
+            )?,
+            _ => return Err("Set up Touch ID unlock first.".into()),
+        };
+        let mut session = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+        if generation != state.lock_generation.load(Ordering::Relaxed) || session.is_some() {
+            return Err(
+                "The vault changed while you were unlocking it. Try again if it is locked.".into(),
+            );
+        }
+        let (accounts, profiles) =
+            mailport_core::unlock_local(&mailport_core::read_encrypted(&state.path)?, &password)
+                .map_err(|_| {
+                    "The saved passphrase could not unlock this vault. Use your master passphrase."
+                })?;
+        *session = Some(Session {
+            accounts,
+            profiles,
+            password,
+            touched: Instant::now(),
+        });
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn vault_configure_quick_unlock(
+    app: AppHandle,
+    method: QuickMethod,
+    enabled: bool,
+    reference: Option<String>,
+) -> Result<()> {
+    blocking(move || {
+        let state = app.state::<VaultState>();
+        let _operation = state
+            .quick_operation
+            .try_lock()
+            .map_err(|_| "An unlock request is already in progress.")?;
+        let generation = state.lock_generation.load(Ordering::Relaxed);
+        with_session(&app, |_, _| Ok(()))?;
+        let candidate = match (&method, enabled) {
+            (QuickMethod::OnePassword, true) => Some(quick_unlock::read_one_password(
+                reference
+                    .as_deref()
+                    .ok_or("Enter a 1Password secret reference.")?,
+            )?),
+            _ => None,
+        };
+        with_session(&app, |session, path| {
+            if generation != state.lock_generation.load(Ordering::Relaxed) {
+                return Err("The vault was locked during setup. Try again.".into());
+            }
+            let mut preferences = state
+                .quick_preferences
+                .lock()
+                .map_err(|_| "Unlock settings are unavailable.")?;
+            let mut next = quick_unlock::Preferences {
+                touch_id: preferences.touch_id,
+                one_password: preferences.one_password.clone(),
+            };
+            match (method, enabled) {
+                (QuickMethod::TouchId, true) if !preferences.touch_id => {
+                    quick_unlock::store_touch_id(&session.password)?;
+                    next.touch_id = true;
+                    if let Err(error) = quick_unlock::save(path, &next) {
+                        quick_unlock::delete_touch_id()?;
+                        return Err(error);
+                    }
+                }
+                (QuickMethod::TouchId, true) => return Ok(()),
+                (QuickMethod::TouchId, false) => {
+                    quick_unlock::delete_touch_id()?;
+                    next.touch_id = false;
+                    quick_unlock::save(path, &next)?;
+                }
+                (QuickMethod::OnePassword, true) => {
+                    if candidate.as_deref().map(String::as_str) != Some(session.password.as_str()) {
+                        return Err(
+                            "That 1Password field does not match this vault’s master passphrase."
+                                .into(),
+                        );
+                    }
+                    next.one_password = reference;
+                    quick_unlock::save(path, &next)?;
+                }
+                (QuickMethod::OnePassword, false) => {
+                    next.one_password = None;
+                    quick_unlock::save(path, &next)?;
+                }
+            }
+            *preferences = next;
+            Ok(())
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 pub fn vault_lock(state: tauri::State<VaultState>) -> Result<()> {
-    *state.session.lock().map_err(|_| "Vault is unavailable.")? = None;
+    let mut session = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+    state.lock_generation.fetch_add(1, Ordering::Relaxed);
+    *session = None;
     Ok(())
 }
 #[tauri::command]
@@ -151,10 +319,15 @@ pub fn vault_account(app: AppHandle, id: String) -> Result<Account> {
     })
 }
 #[tauri::command]
-pub async fn vault_save_account(app: AppHandle, mut account: Account) -> Result<()> {
+pub async fn vault_save_account(
+    app: AppHandle,
+    mut account: Account,
+    profile_id: Option<String>,
+) -> Result<()> {
     blocking(move || {
         with_session(&app, |session, path| {
-            if account.id.is_empty() {
+            let is_new = account.id.is_empty();
+            if is_new {
                 account.id = uuid::Uuid::new_v4().to_string();
             }
             let mut accounts = session.accounts.clone();
@@ -175,14 +348,89 @@ pub async fn vault_save_account(app: AppHandle, mut account: Account) -> Result<
             } else {
                 accounts.push(account.clone());
             }
-            let encrypted = mailport_core::seal(&accounts, &session.password)?;
+            let mut profiles = session.profiles.clone();
+            if is_new {
+                profiles.assign(account.id.clone(), profile_id)?;
+            }
+            let encrypted = mailport_core::seal_local(&accounts, &profiles, &session.password)?;
             mailport_core::write_encrypted(path, &encrypted)?;
             session.accounts = accounts;
+            session.profiles = profiles;
             Ok(())
         })
     })
     .await
 }
+fn update_profiles(
+    session: &mut Session,
+    path: &std::path::Path,
+    update: impl FnOnce(&mut Profiles) -> Result<()>,
+) -> Result<()> {
+    let mut profiles = session.profiles.clone();
+    update(&mut profiles)?;
+    let encrypted = mailport_core::seal_local(&session.accounts, &profiles, &session.password)?;
+    mailport_core::write_encrypted(path, &encrypted)?;
+    session.profiles = profiles;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn vault_save_profile(app: AppHandle, profile: Profile) -> Result<()> {
+    blocking(move || {
+        with_session(&app, |session, path| {
+            update_profiles(session, path, |profiles| profiles.save(profile))
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn vault_move_account(
+    app: AppHandle,
+    account_id: String,
+    profile_id: Option<String>,
+) -> Result<()> {
+    blocking(move || {
+        with_session(&app, |session, path| {
+            if !session
+                .accounts
+                .iter()
+                .any(|account| account.id == account_id)
+            {
+                return Err("That account no longer exists.".into());
+            }
+            update_profiles(session, path, |profiles| {
+                profiles.assign(account_id, profile_id)
+            })
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn vault_delete_accounts(app: AppHandle, ids: Vec<String>) -> Result<()> {
+    blocking(move || {
+        with_session(&app, |session, path| {
+            mailport_core::select_accounts(&session.accounts, &ids)?;
+            let ids: std::collections::HashSet<_> = ids.into_iter().collect();
+            let accounts: Vec<_> = session
+                .accounts
+                .iter()
+                .filter(|account| !ids.contains(&account.id))
+                .cloned()
+                .collect();
+            let mut profiles = session.profiles.clone();
+            profiles.assignments.retain(|id, _| !ids.contains(id));
+            let encrypted = mailport_core::seal_local(&accounts, &profiles, &session.password)?;
+            mailport_core::write_encrypted(path, &encrypted)?;
+            session.accounts = accounts;
+            session.profiles = profiles;
+            Ok(())
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn vault_export(app: AppHandle, ids: Vec<String>, password: String) -> Result<bool> {
     let password = Zeroizing::new(password);
@@ -254,7 +502,7 @@ pub async fn vault_demo(app: AppHandle) -> Result<()> {
             }
             mailport_core::write_encrypted(
                 path,
-                &mailport_core::seal(&accounts, &session.password)?,
+                &mailport_core::seal_local(&accounts, &session.profiles, &session.password)?,
             )?;
             session.accounts = accounts;
             Ok(())
@@ -270,9 +518,14 @@ pub fn setup(app: &mut tauri::App) -> std::result::Result<(), Box<dyn std::error
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
     }
+    let path = directory.join("vault.mailport");
     app.manage(VaultState {
-        path: directory.join("vault.mailport"),
+        quick_preferences: Mutex::new(quick_unlock::load(&path)),
+        path,
         session: Mutex::new(None),
+        quick_operation: Mutex::new(()),
+        touch_id_available: quick_unlock::touch_id_available(),
+        lock_generation: AtomicU64::new(0),
     });
     let handle = app.handle().clone();
     std::thread::spawn(move || loop {
@@ -299,6 +552,7 @@ mod tests {
         let make = |touched| {
             Some(Session {
                 accounts: vec![],
+                profiles: Profiles::default(),
                 password: Zeroizing::new("synthetic-session-only".into()),
                 touched,
             })
