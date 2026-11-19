@@ -512,10 +512,14 @@ html.has-native-glass .vault-app {
 }
 .export-selection {
   display: grid;
+  flex: 1;
   align-content: start;
   gap: 14px;
   overflow: auto;
   padding: 4px 16px 12px;
+}
+.export-sidebar[data-transfer-open] .export-selection {
+  min-block-size: 48px;
 }
 .export-selection h3 {
   margin-bottom: 6px;
@@ -535,6 +539,33 @@ html.has-native-glass .vault-app {
   font-family: var(--vault-mono);
   font-size: 0.75rem;
   overflow-wrap: anywhere;
+}
+.export-package-icon {
+  flex: none;
+  margin: 8px auto 12px;
+}
+.transfer-flying-icon {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  animation: transfer-download var(--vault-motion-layout) var(--vault-press-ease) both;
+}
+@keyframes transfer-download {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate3d(
+      calc(var(--transfer-flight-x) * 0.5 + 16px),
+      calc(var(--transfer-flight-y) * 0.4 - 8px), 0
+    ) scale(0.58);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--transfer-flight-x), var(--transfer-flight-y), 0) scale(0.12);
+  }
 }
 .export-footer,
 .account-delete-area {
@@ -787,16 +818,23 @@ html.has-native-glass .vault-app {
 .welcome h1 + p {
   margin-bottom: 16px;
 }
-.unlock-form .field {
-  gap: 16px;
+.unlock-field {
+  display: grid;
+  gap: 12px;
   margin-bottom: 16px;
 }
-.unlock-form .field > span {
+.unlock-field > label {
+  color: var(--vault-muted);
   font-size: 0.9375rem;
+  font-weight: 600;
+}
+.unlock-field:focus-within > label {
+  color: var(--vault-text);
 }
 .unlock-form input[type="password"] {
-  block-size: 42px;
-  border-radius: 9px;
+  block-size: 46px;
+  padding-inline: 14px;
+  border-radius: 10px;
   background: #ffffff0b;
 }
 .passphrase-fields {
@@ -819,9 +857,16 @@ html.has-native-glass .vault-app {
   opacity: 0;
 }
 .unlock-form input[aria-invalid="true"] {
-  outline: 2px solid #ff5368;
-  outline-offset: -2px;
-  border-color: #ff5368;
+  border-color: var(--vault-error);
+}
+.unlock-form input[aria-invalid="true"]:focus-visible {
+  outline-color: var(--vault-error);
+}
+.passphrase-error {
+  color: var(--vault-error);
+  text-align: start;
+  line-height: 1.4;
+  padding-inline: 2px;
 }
 @media (prefers-reduced-motion: no-preference) {
   .passphrase-fields {
@@ -878,6 +923,7 @@ button:disabled {
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+summary:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--vault-focus);
   outline-offset: 2px;
@@ -1003,31 +1049,148 @@ fieldset {
   justify-content: flex-end;
   margin-top: 16px;
 }
-.disclosure {
+.transfer-panel {
   display: flex;
-  gap: 8px;
-  background: var(--vault-raised);
-  border-radius: 8px;
-  padding: 12px;
-  margin-block: 12px 16px;
-}
-.disclosure svg,
-.export-accounts svg {
+  flex-direction: column;
   flex-shrink: 0;
-}
-.export-accounts {
-  list-style: none;
-}
-.export-accounts li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-block: 6px;
+  max-block-size: 60%;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }
-.export-accounts small {
-  display: block;
+.transfer-content {
+  display: grid;
+  gap: 8px;
+  min-block-size: 0;
+  overflow: auto;
+  padding: 4px 12px 12px;
+}
+.transfer-panel h3 {
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+.transfer-steps {
+  display: grid;
+  gap: 8px;
+  padding-inline-start: 1.4em;
+  list-style: decimal;
+}
+.transfer-steps li::marker {
   color: var(--vault-muted);
+  font-weight: 600;
+}
+.transfer-location {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--vault-muted);
+}
+.transfer-location > span:first-child {
+  display: inline-flex;
+  align-self: center;
+  flex: none;
+  color: var(--vault-text);
+}
+.transfer-content > button {
+  justify-self: start;
+}
+.transfer-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.vault-app .export-footer button.export-action {
+  --vault-control-tint: var(--vault-button-export-color, var(--vault-check-fill));
+  --vault-control-tint-strength: var(--vault-button-export-strength, 100);
+  --vault-control-base: var(--vault-panel);
+  color: var(--vault-check-ink);
+}
+.vault-app .export-footer .transfer-cancel {
+  --vault-control-tint: var(--vault-button-transfer-cancel-color, var(--vault-button-standard-color));
+  --vault-control-tint-strength: var(--vault-button-transfer-cancel-strength, var(--vault-button-standard-strength));
+}
+.vault-app .export-footer button:is(.export-action, .transfer-cancel) {
+  --vault-control-mix: calc(var(--vault-control-tint-strength) * 1%);
+  color: contrast-color(color-mix(in srgb,
+    var(--vault-control-tint) var(--vault-control-mix), var(--vault-panel)));
+}
+.vault-app .export-footer button:is(.export-action, .transfer-cancel):not([data-native-glass]) {
+  background-color: color-mix(in srgb,
+    var(--vault-control-tint) var(--vault-control-mix), var(--vault-control-base, var(--vault-raised)));
+}
+.export-expanded .transfer-actions .primary {
+  grid-area: 1 / 1;
+  width: auto;
+  min-inline-size: 0;
+  padding-inline: 6px;
+}
+.transfer-actions:has(.transfer-cancel) .primary {
+  margin-inline-end: 42px;
+}
+.export-expanded .transfer-actions .transfer-cancel {
+  position: relative;
+  grid-area: 1 / 1;
+  justify-self: end;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 999px;
+}
+.transfer-cancel-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  opacity: 0;
+}
+@media (hover: hover) {
+  .vault-app .export-footer button.export-action:hover:not(:disabled) {
+    --vault-control-tint: var(--vault-button-export-hover-color, var(--vault-button-export-color));
+    --vault-control-tint-strength: var(--vault-button-export-hover-strength, var(--vault-button-export-strength));
+  }
+  .export-expanded .transfer-actions .transfer-cancel:hover:not(:disabled) {
+    width: 100%;
+  }
+  .vault-app .export-footer .transfer-cancel:hover:not(:disabled) {
+    --vault-control-tint: var(--vault-button-transfer-cancel-hover-color, #f0bf33);
+    --vault-control-tint-strength: var(--vault-button-transfer-cancel-hover-strength, 90);
+  }
+  .transfer-actions:has(.transfer-cancel:hover:not(:disabled)) .primary,
+  .transfer-cancel:hover:not(:disabled) > svg {
+    visibility: hidden;
+  }
+  .transfer-cancel:hover:not(:disabled) .transfer-cancel-label {
+    opacity: 1;
+  }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .vault-app .export-expanded .transfer-actions .transfer-cancel:not(:disabled) {
+    transition:
+      width var(--vault-motion-standard) var(--vault-press-ease),
+      scale var(--vault-motion-fast) var(--vault-press-ease);
+  }
+  .transfer-cancel-label {
+    transition: opacity var(--vault-motion-fast) ease-out;
+  }
+  .transfer-cancel:hover:not(:disabled) .transfer-cancel-label {
+    transition-delay: var(--vault-motion-fast);
+  }
+}
+.transfer-code {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--vault-raised);
+  font-family: var(--vault-mono);
+  text-align: center;
+}
+.transfer-panel small {
+  color: var(--vault-muted);
+}
+.transfer-error {
+  color: var(--vault-error);
 }
 .error-banner {
   color: var(--vault-error);
@@ -1405,7 +1568,8 @@ select option {
   border-block-start: 1px solid var(--vault-border);
 }
 .server-summary dt {
-  font-size: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 .server-summary dd {
   display: grid;
@@ -1597,13 +1761,43 @@ input[name="reference"],
 .vault-app .danger-button:hover:not(:disabled, [data-native-glass]) {
   background-color: var(--vault-danger-hover);
 }
-.delete-review {
-  max-height: 160px;
+.account-delete-review {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  max-block-size: 65%;
+}
+.account-delete-copy {
+  display: grid;
+  gap: 8px;
+  min-block-size: 0;
   overflow: auto;
-  margin-block: 12px;
-  font-family: var(--vault-mono);
-  color: var(--vault-muted);
+  padding: 4px 12px 12px;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
+}
+.account-delete-copy h2 {
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+.account-delete-copy ul {
+  font-family: var(--vault-mono);
+}
+.account-delete-copy > p:not(.error-banner) {
+  color: var(--vault-muted);
+}
+.account-delete-review .account-delete-area {
+  gap: 8px;
+}
+.account-delete-review .account-delete-area .icon-button {
+  flex: none;
+  width: 34px;
+}
+.account-delete-review .account-delete-area .danger-button {
+  flex: 1;
+  width: auto;
+  min-inline-size: 0;
+  padding-inline: 6px;
 }
 
 .button-spinner {
@@ -1925,8 +2119,17 @@ html.has-vault-control-glass :is(.account-profile-options, .vault-dialog[data-na
 .dialog-head h2 {
   font-size: var(--vault-heading-dialog);
 }
-.detail-section :is(h3, dt) {
+.detail-section :is(h3, dt),
+.appearance-settings > summary {
   font-size: var(--vault-heading-section);
+}
+.appearance-settings > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.account-details .account-server-details dt {
+  color: var(--vault-muted);
+  font-size: 0.875rem;
 }
 .server-fields legend,
 .avatar-options legend,

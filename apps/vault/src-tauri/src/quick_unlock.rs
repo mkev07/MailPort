@@ -35,7 +35,14 @@ pub fn valid_reference(reference: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{delete_touch_id, read_touch_id, store_touch_id, touch_id_available};
+pub use mac::{
+    approve_transfer, delete_touch_id, read_touch_id, store_touch_id, touch_id_available,
+};
+
+#[cfg(not(target_os = "macos"))]
+pub fn approve_transfer() -> Result<(), String> {
+    Ok(())
+}
 
 #[cfg(target_os = "macos")]
 fn op_path() -> Option<&'static Path> {
@@ -148,6 +155,36 @@ mod mac {
         let result: Bool =
             unsafe { msg_send![&*context, canEvaluatePolicy: 1_isize, error: &mut error] };
         result.as_bool()
+    }
+
+    pub fn approve_transfer() -> Result<(), String> {
+        let Some(class) = AnyClass::get(c"LAContext") else {
+            return Err("macOS authentication is unavailable for this transfer.".into());
+        };
+        let context: Retained<AnyObject> = unsafe { msg_send![class, new] };
+        let mut error: *mut AnyObject = null_mut();
+        // Device owner authentication offers Touch ID and the macOS login fallback.
+        let policy = 2_isize;
+        let available: Bool =
+            unsafe { msg_send![&*context, canEvaluatePolicy: policy, error: &mut error] };
+        if !available.as_bool() {
+            return Err("macOS could not verify your identity for this transfer.".into());
+        }
+        let reason = objc2_foundation::NSString::from_str("Approve this MailPort account transfer");
+        let (send, receive) = std::sync::mpsc::channel();
+        let reply = block2::RcBlock::new(move |success: Bool, _: *mut AnyObject| {
+            let _ = send.send(success.as_bool());
+        });
+        unsafe {
+            let _: () = msg_send![&*context, evaluatePolicy: policy, localizedReason: &*reason, reply: &*reply];
+        }
+        if receive.recv_timeout(std::time::Duration::from_secs(120)) != Ok(true) {
+            unsafe {
+                let _: () = msg_send![&*context, invalidate];
+            }
+            return Err("The transfer wasn’t approved in macOS.".into());
+        }
+        Ok(())
     }
 
     fn query() -> Vec<(CFString, CFType)> {

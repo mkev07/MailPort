@@ -110,17 +110,12 @@ policies and must document them. Generic error codes are `INVALID_ACCOUNTS`,
 `INVALID_VAULT`, `UNLOCK_FAILED`, `INVALID_PASSWORD`, and `INVALID_SELECTION`.
 Wrong passphrases and authenticated-content failures share `UNLOCK_FAILED`.
 
-## Transfer protocol: deliberately pending
+## Passwordless file transfer
 
-The encrypted vault is a storage format. It is not a complete cross-process import
-protocol. Do not treat a vault password as an application authorization token.
-A client receiving the whole vault and password can read every account in it.
-
-A future transfer specification must define recipient identity verification,
-user-visible account scope, authenticated encrypted channels, recipient binding,
-expiration, replay prevention, cancellation and pairing recovery. URLs may carry
-non-secret routing identifiers only. Never put vaults, passwords or transferable
-bearer credentials in ordinary URLs, clipboard contents, telemetry or logs.
+[Passwordless file transfer](transfer.md) defines a separate recipient-bound
+envelope and short-lived import request. The account schema is shared with v1
+vault storage. Password-based files produced by earlier development versions
+remain readable with `unlockVault`.
 
 ## Public test vector
 
@@ -138,8 +133,5 @@ Node, including a selected two-of-five account package. Rust reads the public
 known-answer vector in unit tests. This does not establish compatibility with
 independent email clients.
 
-Desktop exports use the same v1 encrypted envelope, re-encrypting only approved
-accounts with a separate passphrase, salt and nonce. They are ordinary encrypted
-files, without recipient authentication or replay protection. The master vault
-must not be shared when only a subset was approved. Direct app-to-app transport
-remains unspecified.
+Current desktop exports use the [recipient-bound transfer envelope](transfer.md).
+The master vault remains encrypted with its own passphrase.

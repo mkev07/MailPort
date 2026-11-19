@@ -47,13 +47,12 @@ replacement. On Unix, the app directory is mode 0700 and encrypted files are mod
 Creation uses a non-overwriting operation. There is no forgotten-passphrase reset,
 backup rotation, password change or general vault migration UI yet.
 
-Export is an explicitly approved file operation. Only selected accounts are
-included and a different password from the master passphrase is required.
-The native save dialog controls the destination. The master vault file cannot
-be used as the export target. A selected package is re-encrypted with fresh salt
-and nonce. File transfers are not recipient-bound or replay-resistant and are
-not the planned authenticated direct app-to-app protocol. Whoever holds a package
-and its password can retain the included credentials.
+[File transfer](../../docs/transfer.md) requires an import request created by
+the receiving client. MailPort shows the selected accounts and request code.
+Approval opens the native save dialog and prompts macOS to authenticate the
+device owner. Windows and Linux use explicit approval in the unlocked vault.
+The saved package is encrypted to the request's public key. After saving,
+MailPort shows a transfer code for the receiver to compare before import.
 
 ## Adding an account
 
@@ -103,12 +102,11 @@ If the CLI has multiple accounts, configure its default account for the vault.
 3. Edit a display name and save without re-entering saved passwords.
 4. Lock; check that accounts disappear. Try an incorrect passphrase, then unlock correctly.
 5. Quit and reopen; verify the app starts locked and saved settings survive unlock.
-6. Select two accounts and export. Check that the approval list shows exactly those two and warns about credential retention.
-7. Cancel the native save dialog; verify that no success message is shown.
-8. Export with a separate password. Use the SDK to unlock the synthetic package and confirm that exactly the selected accounts are present.
-9. Confirm that modified packages and incorrect passwords fail to unlock.
+6. Start the [demo receiver](../../docs/transfer.md#try-it-with-synthetic-accounts) and select two accounts in the vault. Open the request and compare its code.
+7. Cancel the native save dialog and verify the request can still be used.
+8. Approve and save. Open the package in the demo and check its transfer code against the vault. Confirm that the receiver reports two results.
+9. Run `npm run check:compatibility` for wrong-recipient, retry and replay coverage.
 10. Exercise keyboard navigation, Escape and focus return for both dialogs. Verify five-minute auto-lock and that reopening does not restore secret fields.
 
 No mailboxes are contacted. “Password saved” means encrypted configuration exists,
-not that a provider accepted it. Real client provisioning, server discovery,
-provider OAuth, native signing/notarization and independent review remain pending.
+not that a provider accepted it. Real client provisioning, provider OAuth, native signing/notarization and independent review remain pending.

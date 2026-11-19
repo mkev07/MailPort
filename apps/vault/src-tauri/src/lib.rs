@@ -109,6 +109,7 @@ pub fn run() {
             vault::vault_lock,
             vault::vault_account,
             vault::vault_save_account,
+            vault::vault_load_import_request,
             vault::vault_export,
             vault::vault_save_profile,
             vault::vault_move_account,

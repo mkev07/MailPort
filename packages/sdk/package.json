@@ -24,9 +24,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "test": "tsx --test test/import.test.ts test/vault.test.ts",
     "demo": "tsx examples/roundtrip.ts",
+    "demo:transfer": "tsx examples/receive-transfer.ts",
     "check": "npm run typecheck && npm test && npm run build && npm run demo"
   },
   "dependencies": {
+    "@hpke/core": "^1.10.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {

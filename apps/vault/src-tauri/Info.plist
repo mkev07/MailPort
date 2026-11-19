@@ -10,5 +10,26 @@
 	<string>MailPort opens project folders you choose, including Documents.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>MailPort opens project folders you choose, including Downloads.</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.mailport.account-package</string>
+			<key>UTTypeDescription</key>
+			<string>Encrypted MailPort Package</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.content</string>
+			</array>
+			<key>UTTypeIconFile</key>
+			<string>MailPortDocument.icns</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<string>mailport</string>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>
