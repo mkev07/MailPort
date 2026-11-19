@@ -230,6 +230,7 @@ export function useNativeButtonGlass() {
               ),
             ),
           ]
+            .filter((element) => !element.closest(".account-profile-options"))
             .flatMap((button) => {
               // Native overlays cannot move with WebKit's compositor scroll.
               // Use the in-page control until this container settles.
@@ -255,7 +256,7 @@ export function useNativeButtonGlass() {
         native && !reduced.matches ? controls.map(({ button }) => button) : [],
       );
       const surfaces = [app!, ...app!.querySelectorAll<HTMLElement>(
-        ".detail-pane, .profile-sidebar, .account-pane, .export-sidebar, .account-profile-options, dialog[open]",
+        ".detail-pane, .account-card, .profile-sidebar, .account-pane, .export-sidebar, .account-profile-options, dialog[open]",
       )];
       for (const surface of surfaces) {
         const { left, top, width, height } = surface.getBoundingClientRect();

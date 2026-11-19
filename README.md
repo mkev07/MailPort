@@ -34,7 +34,7 @@ platforms and languages implement the same import flow.
 <img src="apps/vault/public/mailport-document.png" width="96" height="96" align="right" alt="MailPort export document icon">
 
 1. **Start in the receiving app.** Choose **Import from MailPort** to create a
-   `.mailportrequest` file.
+   `.mailport-request` file.
 2. **Export from MailPort Vault.** Select the accounts, click **Export**, then
    **Open import file**. Compare the request codes in both apps. If they match,
    click **Codes match · Save** to create the encrypted `.mailport` file.
@@ -44,7 +44,8 @@ platforms and languages implement the same import flow.
 Each export is encrypted for the receiving session, so there's no export
 password to type or share. The reference receiver expires a request after
 15 minutes, supports retrying an incomplete import in the same session, and
-rejects another import after success.
+rejects another import after success. The vault also accepts requests using the
+earlier `.mailportrequest` extension.
 
 ## Try MailPort
 
@@ -70,6 +71,10 @@ The local vault uses scrypt and AES-256-GCM. Transfers use HPKE to encrypt
 only the selected accounts to the receiving session's public key. The codes
 shown in both apps let you verify the request and export. The transfer works
 offline between the two apps.
+
+For account avatars, the vault may request an image from Gravatar using a hash
+of the email address. Gravatar receives that hash and the network request;
+email hashes can be matched against known addresses.
 
 An approved client can keep credentials it imports. To revoke a saved
 password or app password, change or revoke it with the email provider. See the

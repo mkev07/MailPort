@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 const REQUEST_MAX_BYTES: usize = 4096;
 const REQUEST_FORMAT: &str = "mailport-import-request";
 const PACKAGE_FORMAT: &str = "mailport-transfer";
-const INVALID_REQUEST: &str = "Open the .mailportrequest file from your email app.";
+const INVALID_REQUEST: &str = "Open the .mailport-request file from your email app.";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

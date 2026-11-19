@@ -47,7 +47,8 @@
     ],
     "resources": {
       "macos/Assets.car": "Assets.car",
-      "macos/MailPortDocument.icns": "MailPortDocument.icns"
+      "macos/MailPortDocument.icns": "MailPortDocument.icns",
+      "macos/MailPortRequest.icns": "MailPortRequest.icns"
     },
     "macOS": {
       "entitlements": "Entitlements.plist",

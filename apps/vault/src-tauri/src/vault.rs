@@ -37,12 +37,20 @@ pub struct VaultState {
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConnectionSummary {
+    host: String,
+    port: u16,
+    security: String,
+    username: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Summary {
     id: String,
     email: String,
     display_name: String,
-    incoming_host: String,
-    outgoing_host: String,
+    incoming: ConnectionSummary,
+    outgoing: ConnectionSummary,
     requires_sign_in: bool,
     profile_id: Option<String>,
 }
@@ -58,6 +66,14 @@ pub struct Status {
     one_password_available: bool,
     one_password_enabled: bool,
 }
+fn connection(server: &mailport_core::Server) -> ConnectionSummary {
+    ConnectionSummary {
+        host: server.host.clone(),
+        port: server.port,
+        security: server.security.clone(),
+        username: server.username.clone(),
+    }
+}
 fn summaries(session: &Session) -> Vec<Summary> {
     session
         .accounts
@@ -67,8 +83,8 @@ fn summaries(session: &Session) -> Vec<Summary> {
             email: a.email.clone(),
             profile_id: session.profiles.assignments.get(&a.id).cloned(),
             display_name: a.display_name.clone(),
-            incoming_host: a.incoming.host.clone(),
-            outgoing_host: a.outgoing.host.clone(),
+            incoming: connection(&a.incoming),
+            outgoing: connection(&a.outgoing),
             requires_sign_in: matches!(a.incoming.auth, Auth::Oauth { .. })
                 || matches!(a.outgoing.auth, Auth::Oauth { .. }),
         })
@@ -460,8 +476,8 @@ pub async fn vault_load_import_request(app: AppHandle) -> Result<Option<ExportRe
     blocking(move || {
         with_session(&app, |_, _| Ok(()))?;
         let path = transfer_file_dialog(&app)
-            .set_title("Open the file from your email app")
-            .add_filter("MailPort import file", &["mailportrequest"])
+            .set_title("Open the .mailport-request file from your email app")
+            .add_filter("MailPort import request", &["mailport-request", "mailportrequest"])
             .blocking_pick_file();
         let Some(path) = path else {
             return Ok(None);
@@ -485,6 +501,7 @@ pub async fn vault_load_import_request(app: AppHandle) -> Result<Option<ExportRe
 #[serde(rename_all = "camelCase")]
 pub struct SavedTransfer {
     code: String,
+    file_name: String,
     folder_name: Option<String>,
 }
 
@@ -505,7 +522,7 @@ pub async fn vault_export(
             Ok(state.lock_generation.load(Ordering::Relaxed))
         })?;
         let path = transfer_file_dialog(&app)
-            .set_title("Save MailPort export")
+            .set_title("Save the .mailport export")
             .set_file_name("MailPort-accounts.mailport")
             .add_filter("Encrypted MailPort package", &["mailport"])
             .blocking_save_file();
@@ -534,6 +551,10 @@ pub async fn vault_export(
             mailport_core::write_encrypted(&path, &encrypted)?;
             Ok(Some(SavedTransfer {
                 code: package_code(&encrypted),
+                file_name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "MailPort-accounts.mailport".into()),
                 folder_name: path
                     .parent()
                     .and_then(|folder| folder.file_name())
