@@ -26,6 +26,15 @@ function glassBounds(button: HTMLElement) {
     parent;
     parent = parent.parentElement
   ) {
+    // WebKit can report a box for disclosure content that it no longer paints.
+    if (
+      parent instanceof HTMLDetailsElement &&
+      !parent.open &&
+      !parent.querySelector(":scope > summary")?.contains(button)
+    ) {
+      return null;
+    }
+
     const { overflowX, overflowY } = getComputedStyle(parent);
     if (overflowX === "visible" && overflowY === "visible") continue;
     const bounds = parent.getBoundingClientRect();
@@ -50,8 +59,12 @@ function glassBounds(button: HTMLElement) {
   const profileTint = button.matches(".profile-avatar")
     ? tintChannels(style.getPropertyValue("--profile-avatar-color").trim())
     : null;
-  const tint = profileTint ?? tintChannels(style.getPropertyValue(`--vault-button-${role}-color`).trim());
-  const strength = Number.parseInt(style.getPropertyValue(`--vault-button-${role}-strength`), 10);
+  const controlTint = tintChannels(style.getPropertyValue("--vault-control-tint").trim());
+  const tint = controlTint ?? profileTint ?? tintChannels(style.getPropertyValue(`--vault-button-${role}-color`).trim());
+  const strength = Number.parseInt(
+    style.getPropertyValue(controlTint ? "--vault-control-tint-strength" : `--vault-button-${role}-strength`),
+    10,
+  );
   return {
     tint: button.matches("dialog") ? null : tint,
     neutralTint: profileTint ? 100 : Number.isNaN(strength) ? null : strength,
@@ -165,6 +178,14 @@ export function useNativeButtonGlass() {
         event.target.matches(".passphrase-fields")
       )
         queue();
+    }
+
+    function onExportHover(event: PointerEvent) {
+      if (!(event.target instanceof Element)) return;
+      const button = event.target.closest(".export-action, .transfer-cancel");
+      if (button && !(event.relatedTarget instanceof Node && button.contains(event.relatedTarget))) {
+        queue();
+      }
     }
 
     function queue() {
@@ -302,6 +323,8 @@ export function useNativeButtonGlass() {
       onPassphraseTransition as EventListener,
     );
     reduced.addEventListener("change", queue);
+    app.addEventListener("pointerover", onExportHover);
+    app.addEventListener("pointerout", onExportHover);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onWindowResize);
     window.addEventListener("focus", queue);
@@ -332,6 +355,8 @@ export function useNativeButtonGlass() {
         onPassphraseTransition as EventListener,
       );
       reduced.removeEventListener("change", queue);
+      app.removeEventListener("pointerover", onExportHover);
+      app.removeEventListener("pointerout", onExportHover);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onWindowResize);
       window.removeEventListener("focus", queue);

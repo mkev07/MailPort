@@ -11,6 +11,8 @@ use std::{
 };
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+pub mod transfer;
+
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 const SUITE: &str = "scrypt-n32768-r8-p1-aes256gcm";
 const LOCAL_FORMAT: &str = "mailport-local-vault";

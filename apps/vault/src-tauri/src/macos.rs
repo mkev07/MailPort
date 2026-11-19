@@ -32,9 +32,10 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSAutoresizingMaskOptions, NSColor, NSSlider, NSTitlebarSeparatorStyle,
-    NSUserInterfaceItemIdentification, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
+    NSAppearance, NSAppearanceCustomization, NSAutoresizingMaskOptions, NSColor, NSSlider,
+    NSTitlebarSeparatorStyle, NSUserInterfaceItemIdentification, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowOrderingMode,
 };
 use objc2_foundation::{
     NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUserDefaults,
@@ -87,7 +88,8 @@ impl AppearanceSlider {
         unsafe {
             slider.setTarget(Some(&slider));
             slider.setAction(Some(sel!(appearanceValueChanged:)));
-            let _: () = msg_send![&*slider, setAccessibilityLabel: &*NSString::from_str(&spec.label)];
+            let _: () =
+                msg_send![&*slider, setAccessibilityLabel: &*NSString::from_str(&spec.label)];
         }
         slider
     }
@@ -176,33 +178,53 @@ pub fn set_vault_control_glass(
     let supports_interactive = class
         .instance_method(sel!(setEffectIsInteractive:))
         .is_some();
-    let light_appearance = NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameAqua"));
-    let dark_appearance = NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameDarkAqua"));
+    let light_appearance =
+        NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameAqua"));
+    let dark_appearance =
+        NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameDarkAqua"));
     let configure_effect = |view: &NSView, radius: f64, rect: &crate::window::GlassBounds| unsafe {
-        view.setAppearance(if rect.light { light_appearance.as_deref() } else { dark_appearance.as_deref() });
+        view.setAppearance(if rect.light {
+            light_appearance.as_deref()
+        } else {
+            dark_appearance.as_deref()
+        });
         let _: () = msg_send![view, setCornerRadius: radius];
         if supports_interactive {
             let _: () = msg_send![view, setEffectIsInteractive: rect.interactive && window_active];
         }
         let tint = if rect.panel && !rect.light {
-            Some(NSColor::colorWithSRGBRed_green_blue_alpha(0.16, 0.16, 0.16, 0.56))
+            Some(NSColor::colorWithSRGBRed_green_blue_alpha(
+                0.16, 0.16, 0.16, 0.56,
+            ))
         } else if rect.panel {
             None
         } else if let Some([red, green, blue]) = rect.tint {
-            let percent = rect.neutral_tint.unwrap_or(if rect.destructive { 82 } else { 100 }).min(100);
-            (percent > 0).then(|| NSColor::colorWithSRGBRed_green_blue_alpha(
-                f64::from(red) / 255.0,
-                f64::from(green) / 255.0,
-                f64::from(blue) / 255.0,
-                f64::from(percent) / 100.0,
-            ))
+            let percent = rect
+                .neutral_tint
+                .unwrap_or(if rect.destructive { 82 } else { 100 })
+                .min(100);
+            (percent > 0).then(|| {
+                NSColor::colorWithSRGBRed_green_blue_alpha(
+                    f64::from(red) / 255.0,
+                    f64::from(green) / 255.0,
+                    f64::from(blue) / 255.0,
+                    f64::from(percent) / 100.0,
+                )
+            })
         } else if !window_active {
             let gray = if rect.light { 0.93 } else { 0.19 };
-            Some(NSColor::colorWithSRGBRed_green_blue_alpha(gray, gray, gray, 0.9))
+            Some(NSColor::colorWithSRGBRed_green_blue_alpha(
+                gray, gray, gray, 0.9,
+            ))
         } else {
             let percent = if rect.light { 24 } else { 12 };
             let channel = if rect.light { 1.0 } else { 0.0 };
-            Some(NSColor::colorWithSRGBRed_green_blue_alpha(channel, channel, channel, f64::from(percent) / 100.0))
+            Some(NSColor::colorWithSRGBRed_green_blue_alpha(
+                channel,
+                channel,
+                channel,
+                f64::from(percent) / 100.0,
+            ))
         };
         let _: () = msg_send![view, setTintColor: tint.as_deref()];
     };
@@ -290,7 +312,11 @@ pub fn set_vault_control_glass(
             };
             if unsafe { slider.superview() }.is_none() {
                 slider.setIdentifier(Some(&id));
-                content.addSubview_positioned_relativeTo(&slider, NSWindowOrderingMode::Above, None);
+                content.addSubview_positioned_relativeTo(
+                    &slider,
+                    NSWindowOrderingMode::Above,
+                    None,
+                );
             } else if slider.isHidden() {
                 slider.setDoubleValue(f64::from(spec.value.min(100)));
             }

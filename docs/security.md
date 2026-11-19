@@ -25,6 +25,15 @@ limit input before reading entire files, avoid logging inputs, and secure file
 permissions. Read/modify/write operations need atomic replacement and backup
 policies. This library returns encrypted bytes and does not implement storage.
 
+## Passwordless packages
+
+[File transfers](transfer.md) bind selected accounts to a short-lived request
+key. The user compares request and package fingerprints through trusted
+displays. A cooperating receiver drops its key after successful import and
+rejects replays. The current receiver drops its key on exit and keeps retry
+progress for the lifetime of its process. There is no independent identity
+attestation. A recipient that retains credentials can continue to use them.
+
 ## Remaining threats and host obligations
 
 - Offline guessing remains possible; use a strong, unique passphrase.
@@ -45,7 +54,7 @@ provider compatibility, successful mailbox authentication, or safe OS storage.
 
 Before recommending real credentials: independently review the cryptographic
 format and implementation; verify cross-language vectors; implement secure local
-storage and lock lifecycle; define and review the cross-process transfer protocol;
+storage and lock lifecycle; review the file transfer and any future direct transfer protocol;
 exercise malicious recipient, replay, wrong-recipient and partial-failure cases;
 and complete two real client integrations. Browser and native support each need
 platform-specific review. Automated tests are evidence for the tested behaviors,

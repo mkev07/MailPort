@@ -46,7 +46,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "macos/Assets.car": "Assets.car"
+      "macos/Assets.car": "Assets.car",
+      "macos/MailPortDocument.icns": "MailPortDocument.icns"
     },
     "macOS": {
       "entitlements": "Entitlements.plist",

@@ -19,6 +19,20 @@ export interface ImportResult {
 }
 const requiresSignIn = (a: Account) => a.incoming.auth.type === 'oauth' || a.outgoing.auth.type === 'oauth';
 
+export async function configureAccount(
+  account: Account,
+  save: (account: Account) => Promise<void>,
+): Promise<ImportResult> {
+  const accountId = account.id;
+  const status = requiresSignIn(account) ? 'needs-sign-in' : 'configured';
+  try {
+    await save(account);
+    return { accountId, status };
+  } catch {
+    return { accountId, status: 'failed' };
+  }
+}
+
 /** Safe fields for the host's selection UI. Account addresses remain private data. */
 export function listAccounts(accounts: unknown): AccountSummary[] {
   return parseAccounts(accounts).map(a => ({
@@ -49,14 +63,7 @@ export async function importAccounts(options: {
       results.push({ accountId: id, status: 'cancelled' });
       continue;
     }
-    // Compute before invoking application code, which may mutate its input.
-    const status = requiresSignIn(account) ? 'needs-sign-in' : 'configured';
-    try {
-      await options.adapter.configureAccount(account);
-      results.push({ accountId: id, status });
-    } catch {
-      results.push({ accountId: id, status: 'failed' });
-    }
+    results.push(await configureAccount(account, account => options.adapter.configureAccount(account)));
   }
   return results;
 }

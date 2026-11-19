@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -14,6 +15,7 @@ import { LoadingLabel } from "./components/LoadingLabel";
 import { DeleteDropDots } from "./components/DeleteDropDots";
 import { EmailAvatar } from "./components/EmailAvatar";
 import { CheckCircle } from "./shared/ui/icons";
+import { tintChannels } from "./features/settings/model/tint";
 import { useAccountDrag } from "./useAccountDrag";
 import { useNativeButtonGlass } from "./useNativeButtonGlass";
 import {
@@ -69,6 +71,16 @@ type Status = {
   onePasswordEnabled: boolean;
 };
 type QuickMethod = "touchId" | "onePassword";
+type ExportRecipient = {
+  requestFile: string;
+  clientName: string;
+  verificationCode: string;
+};
+type SavedTransfer = { code: string; folderName: string | null };
+type TransferPane =
+  | { stage: "request" }
+  | { stage: "review"; recipient: ExportRecipient }
+  | ({ stage: "saved" } & SavedTransfer);
 function Icon({
   name,
   size = 20,
@@ -82,6 +94,7 @@ function Icon({
     | "gear"
     | "close"
     | "export"
+    | "folder"
     | "edit"
     | "sidebar"
     | "grab"
@@ -140,6 +153,7 @@ function Icon({
         <path d="M12 15V3m-4 4 4-4 4 4M5 13v5a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-5" />
       </>
     ),
+    folder: <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />,
     edit: (
       <>
         <path d="m15 5 4 4M5 19l4-1L20 7a2.8 2.8 0 0 0-4-4L5 14l-1 6Z" />
@@ -322,43 +336,86 @@ function Field({
     </label>
   );
 }
+function DeleteAccountsButton({
+  count,
+  dragging,
+  dropActive,
+  disabled,
+  onClick,
+}: {
+  count: number;
+  dragging: boolean;
+  dropActive: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const destructive = dropActive || (hovered && !disabled);
+  return (
+    <button
+      id="delete-accounts"
+      type="button"
+      className={destructive ? "secondary danger-button" : "secondary"}
+      disabled={disabled}
+      onPointerEnter={(event) => {
+        if (event.pointerType !== "touch") setHovered(true);
+      }}
+      onPointerLeave={() => setHovered(false)}
+      onPointerCancel={() => setHovered(false)}
+      onClick={onClick}
+    >
+      <Icon name="trash" size={16} />
+      {dragging ? (
+        dropActive ? "Release to review" : "Drop to delete"
+      ) : (
+        <>
+          Delete <span className="selection-count">{count}</span>
+        </>
+      )}
+    </button>
+  );
+}
+type PassphraseField = "password" | "confirm";
+type PassphraseError = { field: PassphraseField; message: string };
 function PasswordFields({
   creating,
-  invalid,
+  issue,
   onInput,
 }: {
   creating: boolean;
-  invalid: boolean;
-  onInput: () => void;
+  issue: PassphraseError | undefined;
+  onInput: (field: PassphraseField) => void;
 }) {
-  return (
-    <>
-      <Field label={creating ? "Master passphrase" : "Enter Master Passphrase"}>
+  const fields: readonly PassphraseField[] = creating ? ["password", "confirm"] : ["password"];
+  return fields.map((field) => {
+    const message = issue?.field === field ? issue.message : undefined;
+    return (
+      <div className="unlock-field" key={field}>
+        <label htmlFor={`unlock-${field}`}>
+          {field === "confirm"
+            ? "Confirm master passphrase"
+            : creating ? "Master passphrase" : "Enter Master Passphrase"}
+        </label>
         <input
-          autoFocus
-          name="password"
+          id={`unlock-${field}`}
+          name={field}
+          autoFocus={field === "password"}
           type="password"
-          aria-invalid={invalid || undefined}
-          aria-describedby={invalid ? "unlock-error" : undefined}
-          onInput={onInput}
+          aria-invalid={message ? true : undefined}
+          aria-describedby={message ? `unlock-${field}-error` : undefined}
+          onInput={() => onInput(field)}
           autoComplete={creating ? "new-password" : "current-password"}
           required
           minLength={12}
         />
-      </Field>
-      {creating && (
-        <Field label="Confirm master passphrase">
-          <input
-            name="confirm"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={12}
-          />
-        </Field>
-      )}
-    </>
-  );
+        {message && (
+          <p id={`unlock-${field}-error`} className="passphrase-error" role="alert">
+            {message}
+          </p>
+        )}
+      </div>
+    );
+  });
 }
 const newAccount = (): Account => ({
   id: "",
@@ -1152,40 +1209,69 @@ const buttonStyles = [
   ["danger", "Destructive"],
   ["selection", "Selected avatar"],
 ] as const;
-type ButtonStyle = (typeof buttonStyles)[number][0];
+const exportButtonStyles = [
+  ["export", "Export / Open import file"],
+  ["export-hover", "Export / Open import file hover"],
+  ["transfer-cancel", "Cancel transfer"],
+  ["transfer-cancel-hover", "Cancel transfer hover"],
+] as const;
+const allButtonStyles = [...buttonStyles, ...exportButtonStyles] as const;
+type ButtonStyle = (typeof allButtonStyles)[number][0];
 type ButtonTint = { color: string; strength: number };
-type ButtonPalette = Record<ButtonStyle, ButtonTint>;
+type ButtonPalette = Partial<Record<ButtonStyle, Partial<ButtonTint>>>;
 type ButtonTheme = "light" | "dark";
 
+function resolveButtonPalette(theme: ButtonTheme, overrides: ButtonPalette): Record<ButtonStyle, ButtonTint> {
+  const neutral = theme === "light" ? { color: "#ffffff", strength: 24 } : { color: "#000000", strength: 12 };
+  const standard = { ...neutral, ...overrides.standard };
+  const selection = { color: "#b7ed60", strength: 100, ...overrides.selection };
+  const exportTint = { ...selection, ...overrides.export };
+  const darkerExport = tintChannels(exportTint.color)
+    ?.map((channel) => Math.round(channel * 0.88).toString(16).padStart(2, "0"))
+    .join("");
+  return {
+    standard,
+    primary: { ...neutral, ...overrides.primary },
+    danger: { color: "#ff526b", strength: 82, ...overrides.danger },
+    selection,
+    export: exportTint,
+    "export-hover": {
+      ...exportTint,
+      color: darkerExport ? `#${darkerExport}` : exportTint.color,
+      ...overrides["export-hover"],
+    },
+    "transfer-cancel": { ...standard, ...overrides["transfer-cancel"] },
+    "transfer-cancel-hover": { color: "#f0bf33", strength: 90, ...overrides["transfer-cancel-hover"] },
+  };
+}
+
 function loadButtonPalette(): Record<ButtonTheme, ButtonPalette> {
-  const defaults = (color: string, strength: number): ButtonPalette => ({
-    standard: { color, strength },
-    primary: { color, strength },
-    danger: { color: "#ff526b", strength: 82 },
-    selection: { color: "#b7ed60", strength: 100 },
-  });
-  const palette = { light: defaults("#ffffff", 24), dark: defaults("#000000", 12) };
+  const palette: Record<ButtonTheme, ButtonPalette> = { light: {}, dark: {} };
   try {
     const legacy = JSON.parse(localStorage.getItem("mailport.buttonGlassTint") ?? "{}");
     const stored = JSON.parse(localStorage.getItem("mailport.buttonPalette") ?? "{}");
     for (const theme of ["light", "dark"] as const) {
       const previousStrength = legacy?.[theme];
       if (Number.isInteger(previousStrength) && previousStrength >= 0 && previousStrength <= 100) {
-        palette[theme].standard.strength = previousStrength;
-        palette[theme].primary.strength = previousStrength;
+        palette[theme].standard = { strength: previousStrength };
+        palette[theme].primary = { strength: previousStrength };
       }
-      for (const [style] of buttonStyles) {
+      for (const [style] of allButtonStyles) {
         const tint = stored?.[theme]?.[style];
+        const override = { ...palette[theme][style] };
         // Replace the previous shipped neutral default while keeping custom colors.
         if (typeof tint?.color === "string" && /^#[0-9a-f]{6}$/i.test(tint.color)) {
           const oldSelectionDefault =
             style === "selection" &&
             tint.color.toLowerCase() === (theme === "light" ? "#323232" : "#dedede") &&
             tint.strength === 100;
-          if (!oldSelectionDefault) palette[theme][style].color = tint.color;
+          if (!oldSelectionDefault) override.color = tint.color;
         }
         if (Number.isInteger(tint?.strength) && tint.strength >= 0 && tint.strength <= 100) {
-          palette[theme][style].strength = tint.strength;
+          override.strength = tint.strength;
+        }
+        if (override.color !== undefined || override.strength !== undefined) {
+          palette[theme][style] = override;
         }
       }
     }
@@ -1271,7 +1357,10 @@ export default function App() {
   const [light, setLight] = useState(isLightScheme);
   const [buttonPalette, setButtonPalette] = useState(loadButtonPalette);
   const buttonTheme = light ? "light" : "dark";
-  const activePalette = buttonPalette[buttonTheme];
+  const activePalette = useMemo(
+    () => resolveButtonPalette(buttonTheme, buttonPalette[buttonTheme]),
+    [buttonPalette, buttonTheme],
+  );
   const updateButtonTint = (style: ButtonStyle, change: Partial<ButtonTint>) =>
     setButtonPalette((previous) => ({
       ...previous,
@@ -1300,7 +1389,7 @@ export default function App() {
 
   useEffect(() => {
     const root = document.documentElement.style;
-    for (const [style] of buttonStyles) {
+    for (const [style] of allButtonStyles) {
       root.setProperty(`--vault-button-${style}-color`, activePalette[style].color);
       root.setProperty(`--vault-button-${style}-strength`, String(activePalette[style].strength));
     }
@@ -1322,19 +1411,20 @@ export default function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [passphraseState, setPassphraseState] = useState<
-    "idle" | "pending" | "failed" | "verified"
+    "idle" | "pending" | "verified"
   >("idle");
+  const [passphraseError, setPassphraseError] = useState<PassphraseError>();
   const unlockForm = useRef<HTMLFormElement>(null);
   const manualUnlock = useRef(false);
   const passphraseHidden =
     passphraseState === "pending" || passphraseState === "verified";
   useEffect(() => {
-    if (!busy && passphraseState === "failed") {
+    if (!busy && !passphraseHidden && passphraseError) {
       unlockForm.current
-        ?.querySelector<HTMLInputElement>('input[name="password"]')
+        ?.querySelector<HTMLInputElement>(`input[name="${passphraseError.field}"]`)
         ?.focus();
     }
-  }, [busy, passphraseState]);
+  }, [busy, passphraseHidden, passphraseError]);
   const [quickUnlockMethod, setQuickUnlockMethod] = useState<QuickMethod>();
   const [pendingMove, setPendingMove] = useState<{
     accountId: string;
@@ -1345,7 +1435,15 @@ export default function App() {
   const [unlockSettings, setUnlockSettings] = useState(false);
   const [editor, setEditor] = useState<Account | null>(null);
   const [deleteIds, setDeleteIds] = useState<string[]>([]);
-  const [exporting, setExporting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const deleteFocus = useRef<string | null>(null);
+  const [transfer, setTransfer] = useState<TransferPane | null>(null);
+  const [transferAction, setTransferAction] = useState<"choose" | "save">();
+  const [transferError, setTransferError] = useState("");
+  const transferFocus = useRef<string | null>(null);
+  const transferDocument = useRef<HTMLImageElement>(null);
+  const transferFolder = useRef<HTMLSpanElement>(null);
   const [profileEditor, setProfileEditor] = useState<Profile | null>(null);
   const [activeProfileId, setActiveProfileId] = useState<string>();
   const [profilesCollapsed, setProfilesCollapsed] = useState(true);
@@ -1356,8 +1454,6 @@ export default function App() {
     if (
       !busy &&
       !editor &&
-      !exporting &&
-      !deleteIds.length &&
       !profileEditor &&
       !unlockSettings &&
       returnFocus.current
@@ -1365,7 +1461,7 @@ export default function App() {
       document.querySelector<HTMLElement>(returnFocus.current)?.focus();
       returnFocus.current = null;
     }
-  }, [busy, editor, exporting, profileEditor, unlockSettings, deleteIds]);
+  }, [busy, editor, profileEditor, unlockSettings]);
   const openSettings = () => {
     returnFocus.current = "#quick-unlock-settings";
     setUnlockSettings(true);
@@ -1375,9 +1471,7 @@ export default function App() {
     status?.unlocked &&
     !busy &&
     !editor &&
-    !exporting &&
-    !profileEditor &&
-    !deleteIds.length;
+    !profileEditor;
   useEffect(() => {
     if (
       !canOpenSettings ||
@@ -1414,7 +1508,7 @@ export default function App() {
       setActiveId(undefined);
       setSelected([]);
       setEditor(null);
-      setExporting(false);
+      setTransfer(null);
       setDeleteIds([]);
       setProfileEditor(null);
       setActiveProfileId(undefined);
@@ -1497,7 +1591,10 @@ export default function App() {
     };
   }, [isMac]);
   useNativeButtonGlass();
-  const run = async (operation: () => Promise<void>, modal = false) => {
+  const run = async (
+    operation: () => Promise<void>,
+    onError: (message: string) => void = setError,
+  ) => {
     setBusy(true);
     setError("");
     setModalError("");
@@ -1509,8 +1606,7 @@ export default function App() {
         typeof e === "string"
           ? e
           : "The operation could not finish. Try again.";
-      if (modal) setModalError(message);
-      else setError(message);
+      onError(message);
     } finally {
       setBusy(false);
     }
@@ -1520,35 +1616,50 @@ export default function App() {
     if (busy) return;
     const form = event.currentTarget;
     const fields = new FormData(form);
-    const password = String(fields.get("password"));
-    if (!status?.exists && password !== fields.get("confirm")) {
-      setError("The passphrases do not match. Enter them again.");
-      form.querySelector<HTMLInputElement>('[name="confirm"]')?.focus();
+    const password = String(fields.get("password") ?? "");
+    const encoded = new TextEncoder().encode(password);
+    const tooLong = encoded.length > 1024;
+    encoded.fill(0);
+    setError("");
+    if (password.length < 12 || tooLong) {
+      setPassphraseError({
+        field: "password",
+        message: !password ? "Enter your master passphrase."
+          : tooLong ? "Use at most 1,024 UTF-8 bytes." : "Use at least 12 characters.",
+      });
       return;
     }
+    if (!status?.exists && password !== fields.get("confirm")) {
+      setPassphraseError({ field: "confirm", message: "The passphrases don’t match. Try again." });
+      return;
+    }
+    setPassphraseError(undefined);
     form.reset();
     manualUnlock.current = true;
     if (status?.exists) setPassphraseState("pending");
     void run(async () => {
-      try {
-        await invoke(status?.exists ? "vault_unlock" : "vault_create", {
-          password,
-        });
-      } catch (failure) {
-        if (status?.exists) setPassphraseState("failed");
-        throw failure;
-      }
+      await invoke(status?.exists ? "vault_unlock" : "vault_create", { password });
       if (status?.exists && document.visibilityState === "visible") {
         setPassphraseState("verified");
         await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
       }
+    }, (message) => {
+      if (status?.exists && message.startsWith("Could not unlock. Check the password")) {
+        setPassphraseError({
+          field: "password",
+          message: "Couldn’t unlock with that passphrase. Check it and try again.",
+        });
+      } else {
+        setError(message);
+      }
     }).finally(() => {
       manualUnlock.current = false;
-      setPassphraseState((state) => (state === "failed" ? state : "idle"));
+      setPassphraseState("idle");
     });
   };
   const quickUnlock = (method: QuickMethod) => {
     if (busy) return;
+    setPassphraseError(undefined);
     setQuickUnlockMethod(method);
     void run(() => invoke<void>("vault_quick_unlock", { method })).finally(() =>
       setQuickUnlockMethod(undefined),
@@ -1568,7 +1679,7 @@ export default function App() {
     );
   const lock = () => {
     setEditor(null);
-    setExporting(false);
+    setTransfer(null);
     setSelected([]);
     void run(async () => {
       await invoke("vault_lock");
@@ -1587,28 +1698,48 @@ export default function App() {
     setSelected((ids) =>
       ids.includes(id) ? ids.filter((i) => i !== id) : [...ids, id],
     );
-  const exportSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const fields = new FormData(form);
-    const password = String(fields.get("password"));
-    if (password !== fields.get("confirm")) {
-      setModalError("The export passwords do not match.");
-      form.querySelector<HTMLInputElement>('[name="confirm"]')?.focus();
-      return;
+  const openTransfer = () => {
+    transferFocus.current = "#export-stage-heading";
+    setExportCollapsed(false);
+    if (!transfer) {
+      setTransferError("");
+      setTransfer({ stage: "request" });
     }
-    form.reset();
+  };
+  const closeTransfer = () => {
+    transferFocus.current = "#export-accounts";
+    setTransfer(null);
+    setTransferError("");
+  };
+  const chooseImportRequest = () => {
+    transferFocus.current = "#transfer-choose-request";
+    setTransferError("");
+    setTransferAction("choose");
     void run(async () => {
-      const saved = await invoke<boolean>("vault_export", {
+      const recipient = await invoke<ExportRecipient | null>("vault_load_import_request");
+      if (recipient) {
+        transferFocus.current = "#export-stage-heading";
+        setTransfer({ stage: "review", recipient });
+      }
+    }, setTransferError).finally(() => setTransferAction(undefined));
+  };
+  const saveTransfer = () => {
+    if (transfer?.stage !== "review" || busy || editing) return;
+    const { requestFile, verificationCode } = transfer.recipient;
+    transferFocus.current = "#transfer-approve";
+    setTransferError("");
+    setTransferAction("save");
+    void run(async () => {
+      const saved = await invoke<SavedTransfer | null>("vault_export", {
         ids: selected,
-        password,
+        requestFile,
+        verifiedCode: verificationCode,
       });
-      setExporting(false);
-      if (saved)
-        toast.success("Encrypted package saved", {
-          description: "Share its password through a separate secure channel.",
-        });
-    }, true);
+      if (saved) {
+        transferFocus.current = "#export-stage-heading";
+        setTransfer({ stage: "saved", ...saved });
+      }
+    }, setTransferError).finally(() => setTransferAction(undefined));
   };
   const savedAccounts = status?.unlocked ? status.accounts : [];
   const allAccounts = pendingMove
@@ -1632,8 +1763,46 @@ export default function App() {
   );
   const hasSelection = selectedAccounts.length > 0;
   useEffect(() => {
-    if (!hasSelection) setExportCollapsed(false);
+    if (!hasSelection) {
+      transferFocus.current = null;
+      setExportCollapsed(false);
+      setTransfer(null);
+    }
   }, [hasSelection]);
+  useEffect(() => {
+    if (!busy && transferFocus.current) {
+      document.querySelector<HTMLElement>(transferFocus.current)?.focus();
+      transferFocus.current = null;
+    }
+  }, [busy, transfer, exportCollapsed]);
+  useEffect(() => {
+    if (transfer?.stage !== "saved" || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const source = transferDocument.current;
+    const folder = transferFolder.current;
+    if (!source || !folder) return;
+    const from = source.getBoundingClientRect();
+    const to = folder.getBoundingClientRect();
+    if (!from.width || !to.width) return;
+
+    const flight = document.createElement("img");
+    flight.className = "transfer-flying-icon";
+    flight.src = source.currentSrc || source.src;
+    flight.alt = "";
+    flight.setAttribute("aria-hidden", "true");
+    const x = to.left + (to.width - from.width) / 2 - from.left;
+    const y = to.top + (to.height - from.height) / 2 - from.top;
+    Object.assign(flight.style, {
+      left: `${from.left}px`,
+      top: `${from.top}px`,
+      width: `${from.width}px`,
+      height: `${from.height}px`,
+    });
+    flight.style.setProperty("--transfer-flight-x", `${x}px`);
+    flight.style.setProperty("--transfer-flight-y", `${y}px`);
+    document.body.append(flight);
+    flight.addEventListener("animationend", () => flight.remove(), { once: true });
+    return () => flight.remove();
+  }, [transfer]);
   const visibleSelection = accounts.filter(({ id }) => selected.includes(id));
   const exportGroups = [
     ...profiles.map((profile) => ({
@@ -1656,6 +1825,18 @@ export default function App() {
   const deleteAccounts = allAccounts.filter((account) =>
     deleteIds.includes(account.id),
   );
+  const reviewingDeletion = deleteAccounts.length > 0;
+  useEffect(() => {
+    deleteFocus.current = null;
+    setDeleteIds((ids) => ids.length ? [] : ids);
+    setDeleteError("");
+  }, [selected, activeProfileId, editing, unlockSettings]);
+  useEffect(() => {
+    if (!busy && deleteFocus.current) {
+      document.querySelector<HTMLElement>(deleteFocus.current)?.focus();
+      deleteFocus.current = null;
+    }
+  }, [busy, deleteIds]);
   const moveAccount = (accountId: string, profileId: string | null) => {
     if (
       busy ||
@@ -1681,19 +1862,36 @@ export default function App() {
       toast.success("Account moved.");
     }).finally(() => setPendingMove(undefined));
   };
-  const confirmDelete = (ids: string[], trigger: string) => {
-    returnFocus.current = trigger;
-    setModalError("");
+  const reviewDeletion = (ids: string[]) => {
+    deleteFocus.current = "#delete-review-heading";
+    setDeleteError("");
     setDeleteIds(ids);
+  };
+  const cancelDeletion = () => {
+    deleteFocus.current = visibleSelection.length ? "#delete-accounts" : "#account-heading";
+    setDeleteError("");
+    setDeleteIds([]);
+  };
+  const deleteReviewedAccounts = () => {
+    if (busy || editing || !reviewingDeletion || deleteAccounts.length !== deleteIds.length) return;
+    setDeleteError("");
+    setDeleting(true);
+    void run(async () => {
+      await invoke("vault_delete_accounts", { ids: deleteIds });
+      returnFocus.current = "#account-heading";
+      setSelected((ids) => ids.filter((id) => !deleteIds.includes(id)));
+      setDeleteIds([]);
+      toast.success(deleteIds.length === 1 ? "Account deleted." : "Accounts deleted.");
+    }, (message) => {
+      deleteFocus.current = "#delete-confirm";
+      setDeleteError(message);
+    }).finally(() => setDeleting(false));
   };
   const { draggedId, dropTarget, start, paintCard } = useAccountDrag(
     Boolean(status?.unlocked && !busy && !editing && !deleteIds.length),
     (accountId, destination) => {
       if (destination === "delete") {
-        confirmDelete(
-          [accountId],
-          visibleSelection.length ? "#delete-accounts" : "#account-heading",
-        );
+        reviewDeletion([accountId]);
       } else if (profiles.some(({ id }) => id === destination)) {
         moveAccount(accountId, destination);
       }
@@ -1763,6 +1961,7 @@ export default function App() {
               className="unlock-form"
               data-passphrase-state={passphraseState}
               onSubmit={unlock}
+              noValidate
             >
               <fieldset disabled={busy}>
                 <div
@@ -1772,12 +1971,12 @@ export default function App() {
                   <div className="passphrase-fields-content">
                     <PasswordFields
                       creating={!status.exists}
-                      invalid={passphraseState === "failed"}
-                      onInput={() => {
-                        if (passphraseState === "failed") {
-                          setPassphraseState("idle");
-                          setError("");
+                      issue={passphraseError}
+                      onInput={(field) => {
+                        if (passphraseError?.field === field || field === "password") {
+                          setPassphraseError(undefined);
                         }
+                        if (error) setError("");
                       }}
                     />
                   </div>
@@ -2119,7 +2318,7 @@ export default function App() {
                         <span
                           className="account-grab"
                           aria-hidden="true"
-                          data-grabbable={!busy && !editing ? "" : undefined}
+                          data-grabbable={!busy && !editing && !reviewingDeletion ? "" : undefined}
                           onPointerDown={(event) => start(event, account.id)}
                         >
                           <Icon name="grab" size={16} />
@@ -2129,7 +2328,56 @@ export default function App() {
                   </ul>
                 </>
               )}
-              {(visibleSelection.length > 0 || draggedId) && (
+              {reviewingDeletion && (
+                <section
+                  className="account-delete-review"
+                  aria-labelledby="delete-review-heading"
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape" && !busy) {
+                      event.preventDefault();
+                      cancelDeletion();
+                    }
+                  }}
+                >
+                  <div className="account-delete-copy">
+                    <h2 id="delete-review-heading" tabIndex={-1}>
+                      {deleteAccounts.length === 1 ? "Delete account?" : `Delete ${deleteAccounts.length} accounts?`}
+                    </h2>
+                    <ul aria-label="Accounts to delete">
+                      {deleteAccounts.map(({ id, email }) => <li key={id}>{email}</li>)}
+                    </ul>
+                    <p>Remove these settings and credentials from MailPort. Your mailboxes stay with their providers.</p>
+                    {deleteError && <p className="error-banner" role="alert">{deleteError}</p>}
+                  </div>
+                  <footer className="account-delete-area">
+                    <button
+                      className="icon-button"
+                      type="button"
+                      aria-label="Cancel deletion"
+                      title="Cancel deletion"
+                      disabled={busy}
+                      onClick={cancelDeletion}
+                    >
+                      <Icon name="close" size={16} />
+                    </button>
+                    <button
+                      id="delete-confirm"
+                      className="secondary danger-button"
+                      type="button"
+                      disabled={busy || editing}
+                      onClick={deleteReviewedAccounts}
+                    >
+                      {deleting ? <LoadingLabel>Deleting…</LoadingLabel> : (
+                        <>
+                          <Icon name="trash" size={16} />
+                          Confirm delete
+                        </>
+                      )}
+                    </button>
+                  </footer>
+                </section>
+              )}
+              {!reviewingDeletion && (visibleSelection.length > 0 || draggedId) && (
                 <footer
                   className="account-delete-area"
                   data-dragging={draggedId ? "" : undefined}
@@ -2137,30 +2385,13 @@ export default function App() {
                   data-drop-active={dropTarget === "delete" ? "" : undefined}
                 >
                   {draggedId && <DeleteDropDots />}
-                  <button
-                    id="delete-accounts"
-                    type="button"
-                    className="secondary danger-button"
-                    disabled={busy || editing || !visibleSelection.length}
-                    onClick={() =>
-                      confirmDelete(
-                        visibleSelection.map(({ id }) => id),
-                        "#delete-accounts",
-                      )
-                    }
-                  >
-                    <Icon name="trash" size={16} />
-                    {draggedId ? (
-                      dropTarget === "delete"
-                        ? "Release to review"
-                        : "Drop to delete"
-                    ) : (
-                      <>
-                        Delete
-                        <span className="selection-count">{visibleSelection.length}</span>
-                      </>
-                    )}
-                  </button>
+                  <DeleteAccountsButton
+                    count={visibleSelection.length}
+                    dragging={!!draggedId}
+                    dropActive={dropTarget === "delete"}
+                    disabled={busy || editing || !!draggedId || !visibleSelection.length}
+                    onClick={() => reviewDeletion(visibleSelection.map(({ id }) => id))}
+                  />
                 </footer>
               )}
             </section>
@@ -2189,49 +2420,6 @@ export default function App() {
                       Done
                     </button>
                   </div>
-                  <section className="detail-section" aria-labelledby="appearance-heading">
-                    <h3 id="appearance-heading">Appearance</h3>
-                    <fieldset className="glass-tint-sliders appearance-button-palette">
-                      <legend>{light ? "Light mode buttons" : "Dark mode buttons"}</legend>
-                      {buttonStyles.map(([style, label]) => (
-                        <div className="appearance-button-color" key={style}>
-                          <input
-                            type="color"
-                            aria-label={`${label} button color`}
-                            value={activePalette[style].color}
-                            onChange={(event) => updateButtonTint(style, { color: event.currentTarget.value })}
-                          />
-                          <AppearanceSlider
-                            id={`${buttonTheme}-button-${style}`}
-                            theme={buttonTheme}
-                            label={`${label} tint`}
-                            value={activePalette[style].strength}
-                            onChange={(strength) => updateButtonTint(style, { strength })}
-                          />
-                        </div>
-                      ))}
-                    </fieldset>
-                    <div className="appearance-groups">
-                      {(["light", "dark"] as const).map((theme) => (
-                        <fieldset className="glass-tint-sliders" key={theme}>
-                          <legend>{theme === "light" ? "Light mode" : "Dark mode"}</legend>
-                          {surfaceControls.map(([surface, label]) => (
-                            <AppearanceSlider
-                              key={surface}
-                              id={`${theme}-${surface}`}
-                              theme={theme}
-                              label={surface === "modal" ? label : `${label} transparency`}
-                              value={transparency[theme][surface]}
-                              onChange={(value) => setTransparency((previous) => ({
-                                ...previous,
-                                [theme]: { ...previous[theme], [surface]: value },
-                              }))}
-                            />
-                          ))}
-                        </fieldset>
-                      ))}
-                    </div>
-                  </section>
                   <div className="detail-section">
                     <h3>Touch ID</h3>
                     <p>
@@ -2321,6 +2509,56 @@ export default function App() {
                       </>
                     )}
                   </div>
+                  <details className="detail-section appearance-settings">
+                    <summary>Appearance</summary>
+                    <div className="appearance-groups">
+                      {([
+                        [light ? "Light mode buttons" : "Dark mode buttons", buttonStyles],
+                        [light ? "Light mode export buttons" : "Dark mode export buttons", exportButtonStyles],
+                      ] as const).map(([title, styles]) => (
+                        <fieldset className="glass-tint-sliders appearance-button-palette" key={title}>
+                          <legend>{title}</legend>
+                          {styles.map(([style, label]) => (
+                            <div className="appearance-button-color" key={style}>
+                              <input
+                                type="color"
+                                aria-label={`${label} button color`}
+                                value={activePalette[style].color}
+                                onChange={(event) => updateButtonTint(style, { color: event.currentTarget.value })}
+                              />
+                              <AppearanceSlider
+                                id={`${buttonTheme}-button-${style}`}
+                                theme={buttonTheme}
+                                label={`${label} tint`}
+                                value={activePalette[style].strength}
+                                onChange={(strength) => updateButtonTint(style, { strength })}
+                              />
+                            </div>
+                          ))}
+                        </fieldset>
+                      ))}
+                    </div>
+                    <div className="appearance-groups">
+                      {(["light", "dark"] as const).map((theme) => (
+                        <fieldset className="glass-tint-sliders" key={theme}>
+                          <legend>{theme === "light" ? "Light mode" : "Dark mode"}</legend>
+                          {surfaceControls.map(([surface, label]) => (
+                            <AppearanceSlider
+                              key={surface}
+                              id={`${theme}-${surface}`}
+                              theme={theme}
+                              label={surface === "modal" ? label : `${label} transparency`}
+                              value={transparency[theme][surface]}
+                              onChange={(value) => setTransparency((previous) => ({
+                                ...previous,
+                                [theme]: { ...previous[theme], [surface]: value },
+                              }))}
+                            />
+                          ))}
+                        </fieldset>
+                      ))}
+                    </div>
+                  </details>
                 </section>
               ) : editor ? (
                 <section
@@ -2349,7 +2587,7 @@ export default function App() {
                         });
                         setEditor(null);
                         toast.success("Account saved.");
-                      }, true)
+                      }, setModalError)
                     }
                   />
                 </section>
@@ -2392,11 +2630,11 @@ export default function App() {
                     </button>
                   </div>
                   <dl className="account-details">
-                    <div className="detail-section">
+                    <div className="detail-section account-server-details">
                       <dt>Incoming (IMAP)</dt>
                       <dd>{active.incomingHost}</dd>
                     </div>
-                    <div className="detail-section">
+                    <div className="detail-section account-server-details">
                       <dt>Outgoing (SMTP)</dt>
                       <dd>{active.outgoingHost}</dd>
                     </div>
@@ -2447,6 +2685,7 @@ export default function App() {
             {hasSelection && (
               <aside
                 className="export-sidebar"
+                data-transfer-open={!exportCollapsed && transfer ? "" : undefined}
                 aria-labelledby="export-heading"
               >
                 <div className="export-toolbar">
@@ -2470,9 +2709,14 @@ export default function App() {
                         ? "Expand selected accounts"
                         : "Collapse selected accounts"
                     }
-                    onClick={() =>
-                      setExportCollapsed((collapsed) => !collapsed)
-                    }
+                    disabled={busy}
+                    onClick={() => {
+                      if (exportCollapsed && transfer) {
+                        openTransfer();
+                      } else {
+                        setExportCollapsed(!exportCollapsed);
+                      }
+                    }}
                   >
                     <Icon name="sidebar" size={16} />
                   </button>
@@ -2491,37 +2735,132 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                <footer className="export-footer">
-                  <button
-                    id="export-accounts"
-                    data-control-glass
-                    className={exportCollapsed ? "icon-button" : "secondary"}
-                    aria-label={
-                      exportCollapsed
-                        ? `Export ${selectedAccounts.length} selected accounts`
-                        : undefined
-                    }
-                    title={
-                      exportCollapsed
-                        ? `Export ${selectedAccounts.length} selected accounts`
-                        : undefined
-                    }
-                    disabled={busy || editing}
-                    onClick={() => {
-                      returnFocus.current = "#export-accounts";
-                      setModalError("");
-                      setExporting(true);
-                    }}
-                  >
-                    <Icon name="export" size={16} />
-                    {!exportCollapsed && (
-                      <>
-                        Export
-                        <span className="selection-count">{selectedAccounts.length}</span>
-                      </>
-                    )}
-                  </button>
-                </footer>
+                {!exportCollapsed && (
+                  <img
+                    ref={transferDocument}
+                    className="export-package-icon"
+                    src="/mailport-document.png"
+                    alt=""
+                    width={96}
+                    height={96}
+                    draggable={false}
+                  />
+                )}
+                {!exportCollapsed && transfer ? (
+                  <section className="transfer-panel" aria-labelledby="export-stage-heading">
+                    <div className="transfer-content">
+                      <h3 id="export-stage-heading" tabIndex={-1}>
+                        {transfer.stage === "saved" ? "Export saved" : "Send to an email app"}
+                      </h3>
+                      {transfer.stage === "request" && (
+                        <ol className="transfer-steps">
+                          <li>In your email app, choose <strong>Import from MailPort</strong>.</li>
+                          <li>Back in MailPort, click <strong>Open import file</strong> and select the file your email app created.</li>
+                          <li>Compare the codes in both apps. If they match, click <strong>Codes match · Save</strong>.</li>
+                        </ol>
+                      )}
+                      {transfer.stage === "review" && (
+                        <>
+                          <p>Does this code match the one in <strong>{transfer.recipient.clientName}</strong>?</p>
+                          <code className="transfer-code">{transfer.recipient.verificationCode}</code>
+                          <small>Your email app can keep the credentials you share.</small>
+                          <button
+                            id="transfer-choose-request"
+                            type="button"
+                            className="secondary"
+                            disabled={busy || editing}
+                            onClick={chooseImportRequest}
+                          >
+                            {transferAction === "choose" ? <LoadingLabel>Opening…</LoadingLabel> : "Change file"}
+                          </button>
+                        </>
+                      )}
+                      {transfer.stage === "saved" && (
+                        <>
+                          <p className="transfer-location">
+                            <span ref={transferFolder}><Icon name="folder" size={16} /></span>
+                            <span>
+                              {transfer.folderName ? <>Saved to <strong>{transfer.folderName}</strong></> : "Saved to your chosen folder"}
+                            </span>
+                          </p>
+                          <p>Open the saved file in your email app and check that this code matches.</p>
+                          <code className="transfer-code">{transfer.code}</code>
+                        </>
+                      )}
+                      {transferError && <p className="transfer-error" role="alert">{transferError}</p>}
+                    </div>
+                    <footer className="export-footer transfer-actions">
+                      {transfer.stage === "request" && (
+                        <button
+                          id="transfer-choose-request"
+                          className="primary export-action"
+                          type="button"
+                          disabled={busy || editing}
+                          onClick={chooseImportRequest}
+                        >
+                          {transferAction === "choose" ? <LoadingLabel>Opening…</LoadingLabel> : "Open import file"}
+                        </button>
+                      )}
+                      {transfer.stage === "review" && (
+                        <button
+                          id="transfer-approve"
+                          className="primary"
+                          type="button"
+                          disabled={busy || editing}
+                          onClick={saveTransfer}
+                        >
+                          {transferAction === "save" ? <LoadingLabel>Preparing…</LoadingLabel> : "Codes match · Save"}
+                        </button>
+                      )}
+                      {transfer.stage === "saved" ? (
+                        <button type="button" className="primary" onClick={closeTransfer}>Done</button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="icon-button transfer-cancel"
+                          aria-label="Cancel transfer"
+                          title="Cancel transfer"
+                          disabled={busy}
+                          onClick={closeTransfer}
+                        >
+                          <Icon name="close" size={16} />
+                          <span className="transfer-cancel-label" aria-hidden="true">
+                            <Icon name="close" size={16} />
+                            Cancel transfer
+                          </span>
+                        </button>
+                      )}
+                    </footer>
+                  </section>
+                ) : (
+                  <footer className="export-footer">
+                    <button
+                      id="export-accounts"
+                      data-control-glass
+                      className={`export-action ${exportCollapsed ? "icon-button" : "secondary"}`}
+                      aria-label={
+                        exportCollapsed
+                          ? transfer ? "Show transfer" : `Export ${selectedAccounts.length} selected accounts`
+                          : undefined
+                      }
+                      title={
+                        exportCollapsed
+                          ? transfer ? "Show transfer" : `Export ${selectedAccounts.length} selected accounts`
+                          : undefined
+                      }
+                      disabled={busy || editing}
+                      onClick={openTransfer}
+                    >
+                      <Icon name="export" size={16} />
+                      {!exportCollapsed && (
+                        <>
+                          Export
+                          <span className="selection-count">{selectedAccounts.length}</span>
+                        </>
+                      )}
+                    </button>
+                  </footer>
+                )}
               </aside>
             )}
           </>
@@ -2554,157 +2893,9 @@ export default function App() {
               void run(async () => {
                 await invoke("vault_save_profile", { profile });
                 setProfileEditor(null);
-              }, true)
+              }, setModalError)
             }
           />
-        </Modal>
-      )}
-      {deleteAccounts.length > 0 && (
-        <Modal
-          title={
-            deleteAccounts.length === 1
-              ? "Delete account?"
-              : `Delete ${deleteAccounts.length} accounts?`
-          }
-          onClose={() => {
-            if (!busy) setDeleteIds([]);
-          }}
-        >
-          <p>
-            This removes the saved settings and credentials from MailPort. Your
-            mailboxes stay with their providers.
-          </p>
-          <ul className="delete-review">
-            {deleteAccounts.map(({ id, email }) => (
-              <li key={id}>{email}</li>
-            ))}
-          </ul>
-          {modalError && (
-            <p role="alert" className="error-banner">
-              {modalError}
-            </p>
-          )}
-          <div className="dialog-actions">
-            <button
-              autoFocus
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={() => setDeleteIds([])}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="secondary danger-button"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await invoke("vault_delete_accounts", { ids: deleteIds });
-                  returnFocus.current = "#account-heading";
-                  setSelected((ids) =>
-                    ids.filter((id) => !deleteIds.includes(id)),
-                  );
-                  setDeleteIds([]);
-                  toast.success(
-                    deleteIds.length === 1
-                      ? "Account deleted."
-                      : "Accounts deleted.",
-                  );
-                }, true)
-              }
-            >
-              {busy ? (
-                <LoadingLabel>Deleting…</LoadingLabel>
-              ) : (
-                <>
-                  <Icon name="trash" size={16} />
-                  Delete
-                </>
-              )}
-            </button>
-          </div>
-        </Modal>
-      )}
-      {exporting && (
-        <Modal
-          title="Export accounts"
-          onClose={() => {
-            if (!busy) {
-              setExporting(false);
-              setModalError("");
-            }
-          }}
-        >
-          <form onSubmit={exportSubmit}>
-            <fieldset disabled={busy}>
-              <ul className="export-accounts">
-                {selectedAccounts.map((a) => (
-                  <li key={a.id}>
-                    <Icon name="mail" size={17} />
-                    <span>
-                      {a.email}
-                      {a.requiresSignIn && (
-                        <small>Sign-in required in the receiving client</small>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <div className="disclosure">
-                <Icon name="shield" size={20} />
-                <p>
-                  Anyone with the package and its password can keep a copy of
-                  the included credentials.
-                </p>
-              </div>
-              <Field
-                label="Export password"
-                hint="At least 12 characters. Use a different password from your master passphrase."
-              >
-                <input
-                  autoFocus
-                  type="password"
-                  name="password"
-                  required
-                  minLength={12}
-                  autoComplete="new-password"
-                />
-              </Field>
-              <Field label="Confirm export password">
-                <input
-                  type="password"
-                  name="confirm"
-                  required
-                  minLength={12}
-                  autoComplete="new-password"
-                />
-              </Field>
-              {modalError && (
-                <p className="error-banner" role="alert">
-                  {modalError}
-                </p>
-              )}
-              <div className="dialog-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setExporting(false)}
-                >
-                  Cancel
-                </button>
-                <button className="secondary" type="submit">
-                  {busy ? (
-                    <LoadingLabel>Preparing package…</LoadingLabel>
-                  ) : (
-                    <>
-                      Choose where to save <Icon name="export" size={16} />
-                    </>
-                  )}
-                </button>
-              </div>
-            </fieldset>
-          </form>
         </Modal>
       )}
       <Toaster

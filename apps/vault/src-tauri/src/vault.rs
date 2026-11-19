@@ -2,7 +2,10 @@ use crate::{
     profiles::{Profile, Profiles},
     quick_unlock,
 };
-use mailport_core::{Account, Auth};
+use mailport_core::{
+    transfer::{package_code, ImportRequest},
+    Account, Auth,
+};
 use serde::Serialize;
 use std::{
     path::PathBuf,
@@ -13,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, String>;
@@ -431,39 +434,112 @@ pub async fn vault_delete_accounts(app: AppHandle, ids: Vec<String>) -> Result<(
     .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportRecipient {
+    request_file: String,
+    client_name: String,
+    verification_code: String,
+}
+
+fn transfer_file_dialog(app: &AppHandle) -> FileDialogBuilder<tauri::Wry> {
+    let paths = app.path();
+    let directory = [paths.download_dir(), paths.document_dir(), paths.home_dir()]
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .find(|directory| directory.is_dir());
+    let dialog = app.dialog().file();
+    match directory {
+        Some(directory) => dialog.set_directory(directory),
+        None => dialog,
+    }
+}
+
 #[tauri::command]
-pub async fn vault_export(app: AppHandle, ids: Vec<String>, password: String) -> Result<bool> {
-    let password = Zeroizing::new(password);
+pub async fn vault_load_import_request(app: AppHandle) -> Result<Option<ExportRecipient>> {
     blocking(move || {
-        let encrypted = with_session(&app, |session, _| {
-            if password.as_str() == session.password.as_str() {
-                return Err("Use a different password from your master passphrase.".into());
-            }
-            let selected = mailport_core::select_accounts(&session.accounts, &ids)?;
-            Ok(mailport_core::seal(&selected, &password)?)
+        with_session(&app, |_, _| Ok(()))?;
+        let path = transfer_file_dialog(&app)
+            .set_title("Open the file from your email app")
+            .add_filter("MailPort import file", &["mailportrequest"])
+            .blocking_pick_file();
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let path = path
+            .into_path()
+            .map_err(|_| "Choose a local request file.")?;
+        let (request, request_file) = ImportRequest::read(&path)?;
+        with_session(&app, |_, _| {
+            Ok(Some(ExportRecipient {
+                verification_code: request.verification_code(),
+                client_name: request.client_name,
+                request_file,
+            }))
+        })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedTransfer {
+    code: String,
+    folder_name: Option<String>,
+}
+
+#[tauri::command]
+pub async fn vault_export(
+    app: AppHandle,
+    ids: Vec<String>,
+    request_file: String,
+    verified_code: String,
+) -> Result<Option<SavedTransfer>> {
+    blocking(move || {
+        let request = ImportRequest::parse(&request_file)?;
+        if request.verification_code() != verified_code {
+            return Err("The import request code does not match.".into());
+        }
+        let state = app.state::<VaultState>();
+        let generation = with_session(&app, |_, _| {
+            Ok(state.lock_generation.load(Ordering::Relaxed))
         })?;
-        let path = app
-            .dialog()
-            .file()
-            .set_title("Export selected MailPort accounts")
+        let path = transfer_file_dialog(&app)
+            .set_title("Save MailPort export")
             .set_file_name("MailPort-accounts.mailport")
             .add_filter("Encrypted MailPort package", &["mailport"])
             .blocking_save_file();
         let Some(path) = path else {
-            return Ok(false);
+            return Ok(None);
         };
         let path = path
             .into_path()
             .map_err(|_| "Choose a local file destination.")?;
         // Never let an export replace the master vault, including alias paths.
-        let vault_path = app.state::<VaultState>().path.clone();
-        if path == vault_path
+        let vault_path = &state.path;
+        if path == *vault_path
             || (path.exists() && path.canonicalize().ok() == vault_path.canonicalize().ok())
         {
             return Err("Choose a destination outside the vault's own file.".into());
         }
-        mailport_core::write_encrypted(&path, &encrypted)?;
-        Ok(true)
+        quick_unlock::approve_transfer()?;
+        with_session(&app, |session, _| {
+            if generation != state.lock_generation.load(Ordering::Relaxed) {
+                return Err(
+                    "The vault was locked during approval. Start the transfer again.".into(),
+                );
+            }
+            let selected = mailport_core::select_accounts(&session.accounts, &ids)?;
+            let encrypted = request.seal(&selected)?;
+            mailport_core::write_encrypted(&path, &encrypted)?;
+            Ok(Some(SavedTransfer {
+                code: package_code(&encrypted),
+                folder_name: path
+                    .parent()
+                    .and_then(|folder| folder.file_name())
+                    .map(|name| name.to_string_lossy().into_owned()),
+            }))
+        })
     })
     .await
 }

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { sealVault, unlockVault } from "../packages/sdk/dist/index.js";
+import {
+  ImportRequestSession,
+  sealVault,
+  transferPackageCode,
+  unlockVault,
+} from "../packages/sdk/dist/index.js";
 const vector = JSON.parse(
   await readFile(new URL("../docs/vectors/v1.json", import.meta.url), "utf8"),
 );
@@ -50,3 +55,81 @@ rust(
 console.log(
   "Bidirectional Rust/Node format checks passed, including a two-of-five account package.",
 );
+
+for (const server of ["incoming", "outgoing"]) {
+  selected[0][server].auth = { type: "password", password: "public-test-password" };
+}
+selected[1].incoming.auth = { type: "oauth", providerId: "example-provider" };
+const receiver = await ImportRequestSession.create("Compatibility Client");
+const transferInput = JSON.stringify({
+  requestFile: receiver.requestFile,
+  accounts,
+  ids: selected.map(({ id }) => id),
+});
+const transfer = JSON.parse(rust(["seal-transfer"], transferInput));
+const alternate = JSON.parse(rust(["seal-transfer"], transferInput));
+assert.equal(transfer.verificationCode, receiver.verificationCode);
+assert.equal(transfer.packageCode, transferPackageCode(transfer.package));
+assert.notEqual(transfer.package, alternate.package);
+assert.ok(!transfer.package.includes(selected[0].email));
+const calls = [];
+let shouldFail = true;
+const options = {
+  serialized: transfer.package,
+  verifiedCode: transfer.packageCode,
+  adapter: {
+    async upsertAccount(account) {
+      calls.push(account);
+      if (shouldFail && account.id === selected[1].id) throw new Error("Synthetic failure");
+    },
+  },
+};
+const wrongReceiver = await ImportRequestSession.create("Other Client");
+await assert.rejects(wrongReceiver.importPackage(options), { code: "WRONG_RECIPIENT" });
+const forged = JSON.stringify({
+  ...JSON.parse(transfer.package),
+  requestId: JSON.parse(wrongReceiver.requestFile).requestId,
+});
+await assert.rejects(
+  wrongReceiver.importPackage({ ...options, serialized: forged, verifiedCode: transferPackageCode(forged) }),
+  { code: "INVALID_TRANSFER_PACKAGE" },
+);
+wrongReceiver.close();
+await assert.rejects(receiver.importPackage({ ...options, verifiedCode: "UNKNOWN" }), { code: "CODE_MISMATCH" });
+assert.equal(calls.length, 0);
+
+const first = receiver.importPackage(options);
+await assert.rejects(receiver.importPackage(options), { code: "TRANSFER_BUSY" });
+assert.deepEqual(await first, {
+  completed: false,
+  results: [
+    { accountId: selected[0].id, status: "configured" },
+    { accountId: selected[1].id, status: "failed" },
+  ],
+});
+assert.deepEqual(calls, selected);
+await assert.rejects(
+  receiver.importPackage({ ...options, serialized: alternate.package, verifiedCode: alternate.packageCode }),
+  { code: "DIFFERENT_PACKAGE" },
+);
+shouldFail = false;
+assert.deepEqual(await receiver.importPackage(options), {
+  completed: true,
+  results: [
+    { accountId: selected[0].id, status: "configured" },
+    { accountId: selected[1].id, status: "needs-sign-in" },
+  ],
+});
+assert.deepEqual(calls, [...selected, selected[1]]);
+await assert.rejects(receiver.importPackage(options), { code: "TRANSFER_USED" });
+assert.equal(calls.length, 3);
+const expiring = await ImportRequestSession.create("Expiring Client");
+const originalNow = Date.now;
+try {
+  Date.now = () => expiring.expiresAt * 1000;
+  await assert.rejects(expiring.importPackage(options), { code: "TRANSFER_EXPIRED" });
+} finally {
+  Date.now = originalNow;
+  expiring.close();
+}
+console.log("Rust-to-Node passwordless transfer passed, including wrong recipient, concurrent import, retry, expiry and replay checks.");
