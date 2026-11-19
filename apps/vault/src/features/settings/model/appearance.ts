@@ -144,7 +144,7 @@ export const THEME_DARK_LIGHTNESS_DEFAULT = 9;
 
 export const SIDEBAR_OPACITY_MIN = 0.15;
 export const SIDEBAR_OPACITY_MAX = 1;
-export const SIDEBAR_OPACITY_DEFAULT = 0.85;
+export const SIDEBAR_OPACITY_DEFAULT = 0.60;
 
 export const SIDEBAR_BLUR_MIN = 1;
 export const SIDEBAR_BLUR_MAX = 64;
@@ -557,7 +557,8 @@ export function syncNativeGlass(scheme: ColorScheme) {
   // arrives too: launch and theme refreshes must not fall back to classic glass.
   const inset = insetLayoutActive() || loadInsetLayout();
   const enabled =
-    scheme === "dark" &&
+    (scheme === "dark" || IS_MAC) &&
+    !window.matchMedia("(prefers-reduced-transparency: reduce)").matches &&
     (inset
       ? !IS_LINUX && loadInsetGlass()
       : !IS_LINUX || loadBodyGlass());
@@ -567,7 +568,7 @@ export function syncNativeGlass(scheme: ColorScheme) {
     invoke<boolean>("set_window_glass_enabled", {
       enabled,
       background: opaqueWindowBackground(),
-      ...(IS_MAC ? { opacity: nativeWindowOpacity() } : {}),
+      ...(IS_MAC ? { opacity: scheme === "light" ? 0.52 : nativeWindowOpacity() } : {}),
     }).catch(() => {});
 
   if (glassFadeTimer !== undefined) {

@@ -4,9 +4,11 @@
     "windows": [
       {
         "label": "main",
+        "dragDropEnabled": false,
         "title": "MailPort Vault",
-        "width": 1280,
-        "height": 800,
+        "width": 1500,
+        "height": 1020,
+        "center": true,
         "minWidth": 800,
         "minHeight": 520,
         "decorations": false,

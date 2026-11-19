@@ -11,6 +11,17 @@ Read-only answers and status checks do not need a log.
 
 ## Interface work
 
+- Use Allo for MailPort UI typography. The requested icon family is Hugeicons
+  Standard Duotone; keep Pro credentials and proprietary icon source out of the
+  public repository. Resolve the public-build licensing strategy before adding
+  a private runtime dependency.
+- Use the project-scoped [Emil Kowalski skills](https://github.com/emilkowalski/skills)
+  for design engineering and interaction work. Choose the skill that fits:
+  `emil-design-eng` for general interaction polish, `apple-design` for native
+  conventions, and the focused motion, performance, and review skills for
+  those tasks. Use `break-ui` for interaction edge cases. Start with
+  `.agents/skills/<name>/SKILL.md`. The full upstream set is installed for
+  tasks that need it.
 - Read DESIGN.md before design changes. The selected direction is Option A:
   a compact native vault with an account list, details pane and familiar toolbar.
 - Use Vercel UI SDK where it improves keyboard navigation, selection, focus,

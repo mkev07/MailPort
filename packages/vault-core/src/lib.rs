@@ -13,6 +13,9 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 const SUITE: &str = "scrypt-n32768-r8-p1-aes256gcm";
+const LOCAL_FORMAT: &str = "mailport-local-vault";
+const LOCAL_AAD: &[u8] = b"MailPort:local:1:scrypt-n32768-r8-p1-aes256gcm";
+const EXPORT_FORMAT: &str = "mailport-vault";
 const AAD: &[u8] = b"MailPort:1:scrypt-n32768-r8-p1-aes256gcm";
 pub type Result<T> = std::result::Result<T, &'static str>;
 
@@ -49,6 +52,12 @@ pub struct Account {
 #[serde(deny_unknown_fields)]
 struct PayloadData {
     accounts: Vec<Account>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalPayload<T> {
+    accounts: Vec<Account>,
+    metadata: T,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -146,17 +155,46 @@ fn decode(s: &str) -> Result<Vec<u8>> {
 }
 pub fn seal(accounts: &[Account], password: &str) -> Result<String> {
     validate_accounts(accounts)?;
+    seal_payload(
+        &PayloadData {
+            accounts: accounts.to_vec(),
+        },
+        password,
+        EXPORT_FORMAT,
+        AAD,
+    )
+}
+
+pub fn seal_local<T: Serialize + Clone>(
+    accounts: &[Account],
+    metadata: &T,
+    password: &str,
+) -> Result<String> {
+    validate_accounts(accounts)?;
+    seal_payload(
+        &LocalPayload {
+            accounts: accounts.to_vec(),
+            metadata: metadata.clone(),
+        },
+        password,
+        LOCAL_FORMAT,
+        LOCAL_AAD,
+    )
+}
+
+fn seal_payload(
+    payload: &impl Serialize,
+    password: &str,
+    format: &str,
+    aad: &[u8],
+) -> Result<String> {
     let mut salt = [0u8; 16];
     let mut nonce = [0u8; 12];
     getrandom::getrandom(&mut salt).map_err(|_| "Secure randomness is unavailable.")?;
     getrandom::getrandom(&mut nonce).map_err(|_| "Secure randomness is unavailable.")?;
     let key = derive(password, &salt)?;
-    let plaintext = Zeroizing::new(
-        serde_json::to_vec(&PayloadData {
-            accounts: accounts.to_vec(),
-        })
-        .map_err(|_| "Could not encode vault.")?,
-    );
+    let plaintext =
+        Zeroizing::new(serde_json::to_vec(payload).map_err(|_| "Could not encode vault.")?);
     let cipher =
         Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| "Vault cryptography failed.")?;
     let mut combined = cipher
@@ -164,13 +202,13 @@ pub fn seal(accounts: &[Account], password: &str) -> Result<String> {
             Nonce::from_slice(&nonce),
             Payload {
                 msg: &plaintext,
-                aad: AAD,
+                aad,
             },
         )
         .map_err(|_| "Vault cryptography failed.")?;
     let tag = combined.split_off(combined.len() - 16);
     let text = serde_json::to_string(&Envelope {
-        format: "mailport-vault".into(),
+        format: format.into(),
         version: 1,
         suite: SUITE.into(),
         salt: STANDARD.encode(salt),
@@ -185,11 +223,43 @@ pub fn seal(accounts: &[Account], password: &str) -> Result<String> {
     Ok(text)
 }
 pub fn unlock(text: &str, password: &str) -> Result<Vec<Account>> {
+    let envelope = read_envelope(text)?;
+    unlock_export(envelope, password)
+}
+
+pub fn unlock_local<T: serde::de::DeserializeOwned + Default>(
+    text: &str,
+    password: &str,
+) -> Result<(Vec<Account>, T)> {
+    let envelope = read_envelope(text)?;
+    if envelope.format == EXPORT_FORMAT {
+        return Ok((unlock_export(envelope, password)?, T::default()));
+    }
+    let payload: LocalPayload<T> = unlock_payload(envelope, password, LOCAL_FORMAT, LOCAL_AAD)?;
+    validate_accounts(&payload.accounts)?;
+    Ok((payload.accounts, payload.metadata))
+}
+
+fn unlock_export(envelope: Envelope, password: &str) -> Result<Vec<Account>> {
+    let payload: PayloadData = unlock_payload(envelope, password, EXPORT_FORMAT, AAD)?;
+    validate_accounts(&payload.accounts)?;
+    Ok(payload.accounts)
+}
+
+fn read_envelope(text: &str) -> Result<Envelope> {
     if text.len() > MAX_BYTES {
         return Err("MailPort packages must be at most 4 MiB.");
     }
-    let envelope: Envelope = serde_json::from_str(text).map_err(|_| "Invalid MailPort package.")?;
-    if envelope.format != "mailport-vault" || envelope.version != 1 || envelope.suite != SUITE {
+    serde_json::from_str(text).map_err(|_| "Invalid MailPort package.")
+}
+
+fn unlock_payload<T: serde::de::DeserializeOwned>(
+    envelope: Envelope,
+    password: &str,
+    format: &str,
+    aad: &[u8],
+) -> Result<T> {
+    if envelope.format != format || envelope.version != 1 || envelope.suite != SUITE {
         return Err("Unsupported MailPort format.");
     }
     let salt = decode(&envelope.salt)?;
@@ -209,15 +279,12 @@ pub fn unlock(text: &str, password: &str) -> Result<Vec<Account>> {
                 Nonce::from_slice(&nonce),
                 Payload {
                     msg: &combined,
-                    aad: AAD,
+                    aad,
                 },
             )
             .map_err(|_| "Could not unlock. Check the password; the file may also be damaged.")?,
     );
-    let payload: PayloadData =
-        serde_json::from_slice(&plaintext).map_err(|_| "Invalid vault contents.")?;
-    validate_accounts(&payload.accounts)?;
-    Ok(payload.accounts)
+    serde_json::from_slice(&plaintext).map_err(|_| "Invalid vault contents.")
 }
 pub fn read_encrypted(path: &Path) -> Result<String> {
     let file = fs::File::open(path).map_err(|_| "Could not read the encrypted file.")?;
@@ -295,6 +362,23 @@ mod tests {
         let accounts = unlock(&v["envelope"].to_string(), v["password"].as_str().unwrap()).unwrap();
         assert_eq!(serde_json::to_value(accounts).unwrap(), v["accounts"]);
     }
+    #[test]
+    fn local_vault_adopts_legacy_accounts_and_keeps_metadata_out_of_exports() {
+        let v = vector();
+        let password = v["password"].as_str().unwrap();
+        let (accounts, metadata) =
+            unlock_local::<serde_json::Value>(&v["envelope"].to_string(), password).unwrap();
+        assert!(metadata.is_null());
+        let profile = serde_json::json!({ "profile": "Private project" });
+        let encrypted = seal_local(&accounts, &profile, password).unwrap();
+        assert!(!encrypted.contains("Private project"));
+        assert!(unlock(&encrypted, password).is_err());
+        let (restored, restored_metadata) =
+            unlock_local::<serde_json::Value>(&encrypted, password).unwrap();
+        assert_eq!(restored_metadata, profile);
+        assert_eq!(serde_json::to_value(restored).unwrap(), v["accounts"]);
+    }
+
     #[test]
     fn encrypts_roundtrip_and_rejects_tampering() {
         let v = vector();

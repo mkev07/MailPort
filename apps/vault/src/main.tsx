@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { initAppearance } from "./features/settings/model/appearance";
 import App from "./App";
+import "allo-font";
 import "./styles/index.css";
 import "./styles/vault.css";
 

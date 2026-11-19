@@ -28,17 +28,70 @@ use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use objc2::rc::Retained;
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::rc::{Allocated, Retained};
+use objc2::runtime::{AnyClass, AnyObject};
+use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSColor, NSTitlebarSeparatorStyle,
+    NSAppearance, NSAppearanceCustomization, NSAutoresizingMaskOptions, NSColor, NSSlider, NSTitlebarSeparatorStyle,
     NSUserInterfaceItemIdentification, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
     NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSRect, NSString, NSUserDefaults};
+use objc2_foundation::{
+    NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSUserDefaults,
+};
 use objc2_quartz_core::CALayer;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use tauri::{WebviewWindow, WindowEvent};
+use tauri::{Emitter, WebviewWindow, WindowEvent};
+
+struct AppearanceSliderIvars {
+    id: String,
+    window: WebviewWindow,
+}
+
+define_class!(
+    #[unsafe(super(NSSlider))]
+    #[name = "MailPortAppearanceSlider"]
+    #[ivars = AppearanceSliderIvars]
+    struct AppearanceSlider;
+
+    impl AppearanceSlider {
+        #[unsafe(method(appearanceValueChanged:))]
+        fn appearance_value_changed(&self, _sender: &NSSlider) {
+            let _ = self.ivars().window.emit(
+                "vault-slider-change",
+                serde_json::json!({
+                    "id": self.ivars().id,
+                    "value": self.doubleValue().round() as u8,
+                }),
+            );
+        }
+    }
+);
+
+impl AppearanceSlider {
+    fn new(
+        window: &WebviewWindow,
+        spec: &crate::window::AppearanceSliderSpec,
+        frame: NSRect,
+        mtm: MainThreadMarker,
+    ) -> Retained<Self> {
+        let allocated = Self::alloc(mtm).set_ivars(AppearanceSliderIvars {
+            id: spec.id.clone(),
+            window: window.clone(),
+        });
+        let slider: Retained<Self> = unsafe { msg_send![super(allocated), initWithFrame: frame] };
+        slider.setMinValue(0.0);
+        slider.setMaxValue(100.0);
+        slider.setDoubleValue(f64::from(spec.value.min(100)));
+        slider.setContinuous(true);
+        unsafe {
+            slider.setTarget(Some(&slider));
+            slider.setAction(Some(sel!(appearanceValueChanged:)));
+            let _: () = msg_send![&*slider, setAccessibilityLabel: &*NSString::from_str(&spec.label)];
+        }
+        slider
+    }
+}
 
 /// Must match the HTML title bar (`h-10` = 40px).
 const TAB_BAR_HEIGHT: f64 = 40.0;
@@ -92,11 +145,201 @@ pub fn install(window: &WebviewWindow) {
         WindowEvent::Focused(true) => {
             pin(&event_window);
         }
+        WindowEvent::Resized(_) => {
+            set_vault_control_glass(&event_window, &[]);
+        }
         WindowEvent::Destroyed => {
             set_glass_enabled(&event_window, false);
         }
         _ => {}
     });
+}
+
+pub fn is_live_resizing(window: &WebviewWindow) -> bool {
+    ns_window(window).is_some_and(|window| window.inLiveResize())
+}
+
+pub fn set_vault_control_glass(
+    window: &WebviewWindow,
+    controls: &[crate::window::GlassBounds],
+) -> bool {
+    let Some(native_window) = ns_window(window) else {
+        return false;
+    };
+    let Some(content) = native_window.contentView() else {
+        return false;
+    };
+    let window_active = native_window.isKeyWindow();
+    let Some(class) = AnyClass::get(c"NSGlassEffectView") else {
+        return false;
+    };
+    let supports_interactive = class
+        .instance_method(sel!(setEffectIsInteractive:))
+        .is_some();
+    let light_appearance = NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameAqua"));
+    let dark_appearance = NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameDarkAqua"));
+    let configure_effect = |view: &NSView, radius: f64, rect: &crate::window::GlassBounds| unsafe {
+        view.setAppearance(if rect.light { light_appearance.as_deref() } else { dark_appearance.as_deref() });
+        let _: () = msg_send![view, setCornerRadius: radius];
+        if supports_interactive {
+            let _: () = msg_send![view, setEffectIsInteractive: rect.interactive && window_active];
+        }
+        let tint = if rect.panel && !rect.light {
+            Some(NSColor::colorWithSRGBRed_green_blue_alpha(0.16, 0.16, 0.16, 0.56))
+        } else if rect.panel {
+            None
+        } else if let Some([red, green, blue]) = rect.tint {
+            let percent = rect.neutral_tint.unwrap_or(if rect.destructive { 82 } else { 100 }).min(100);
+            (percent > 0).then(|| NSColor::colorWithSRGBRed_green_blue_alpha(
+                f64::from(red) / 255.0,
+                f64::from(green) / 255.0,
+                f64::from(blue) / 255.0,
+                f64::from(percent) / 100.0,
+            ))
+        } else if !window_active {
+            let gray = if rect.light { 0.93 } else { 0.19 };
+            Some(NSColor::colorWithSRGBRed_green_blue_alpha(gray, gray, gray, 0.9))
+        } else {
+            let percent = if rect.light { 24 } else { 12 };
+            let channel = if rect.light { 1.0 } else { 0.0 };
+            Some(NSColor::colorWithSRGBRed_green_blue_alpha(channel, channel, channel, f64::from(percent) / 100.0))
+        };
+        let _: () = msg_send![view, setTintColor: tint.as_deref()];
+    };
+    let bounds = content.bounds();
+    let subviews = content.subviews();
+    let tint_id = NSString::from_str(GLASS_TINT_ID);
+    let tint = subviews
+        .iter()
+        .find(|view| view.identifier().as_deref() == Some(&tint_id));
+
+    let panel_index = crate::window::MAX_GLASS_CONTROLS;
+    let slider_index = panel_index * 2 + 1;
+    let active: Vec<_> = controls
+        .iter()
+        .enumerate()
+        .map(|(index, rect)| {
+            let slot = if rect.slider.is_some() {
+                slider_index + index
+            } else if rect.panel {
+                panel_index
+            } else if rect.in_dialog {
+                // Modal controls must be inserted above the native panel.
+                panel_index + 1 + index
+            } else {
+                index
+            };
+            (slot, rect)
+        })
+        .collect();
+    let mut existing_views = std::collections::BTreeMap::new();
+    for view in subviews.iter() {
+        let Some(index) = view.identifier().and_then(|identifier| {
+            identifier
+                .to_string()
+                .strip_prefix("mailport.control-glass.")?
+                .parse::<usize>()
+                .ok()
+        }) else {
+            continue;
+        };
+        if !active
+            .iter()
+            .any(|(active_index, _)| *active_index == index)
+        {
+            if index >= slider_index {
+                view.removeFromSuperview();
+            } else {
+                view.setHidden(true);
+            }
+        } else {
+            existing_views.insert(index, view);
+        }
+    }
+    let mut panel = existing_views.get(&panel_index).cloned();
+    for (index, rect) in active {
+        let corner_radius = rect.radius * bounds.size.height;
+        let top = if content.isFlipped() {
+            rect.top
+        } else {
+            1.0 - rect.top - rect.height
+        };
+        let height = rect.height * bounds.size.height;
+        let frame = NSRect::new(
+            NSPoint::new(rect.left * bounds.size.width, top * bounds.size.height),
+            NSSize::new(rect.width * bounds.size.width, height),
+        );
+        if let Some(spec) = &rect.slider {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return false;
+            };
+            let id = NSString::from_str(&format!("mailport.control-glass.{index}"));
+            let slider = if let Some(view) = existing_views.remove(&index) {
+                if let Ok(slider) = view.downcast::<AppearanceSlider>() {
+                    if slider.ivars().id == spec.id {
+                        slider
+                    } else {
+                        slider.removeFromSuperview();
+                        AppearanceSlider::new(window, spec, frame, mtm)
+                    }
+                } else {
+                    return false;
+                }
+            } else {
+                AppearanceSlider::new(window, spec, frame, mtm)
+            };
+            if unsafe { slider.superview() }.is_none() {
+                slider.setIdentifier(Some(&id));
+                content.addSubview_positioned_relativeTo(&slider, NSWindowOrderingMode::Above, None);
+            } else if slider.isHidden() {
+                slider.setDoubleValue(f64::from(spec.value.min(100)));
+            }
+            slider.setFrame(frame);
+            slider.setAppearance(if rect.light {
+                light_appearance.as_deref()
+            } else {
+                dark_appearance.as_deref()
+            });
+            slider.setHidden(false);
+            continue;
+        }
+        if let Some(view) = existing_views.get(&index) {
+            view.setFrame(frame);
+            configure_effect(view, corner_radius, rect);
+            view.setHidden(false);
+            continue;
+        }
+
+        // Keep AppKit's material behind WebKit so HTML retains focus and hit testing.
+        let glass: Retained<AnyObject> = unsafe {
+            let allocated: Allocated<AnyObject> = msg_send![class, alloc];
+            msg_send![allocated, initWithFrame: frame]
+        };
+        let Ok(glass) = glass.downcast::<NSView>() else {
+            return false;
+        };
+        configure_effect(&glass, corner_radius, rect);
+        let identifier = NSString::from_str(&format!("mailport.control-glass.{index}"));
+        glass.setIdentifier(Some(&identifier));
+        let anchor = if rect.panel {
+            tint.as_deref()
+        } else {
+            panel.as_deref().or(tint.as_deref())
+        };
+        content.addSubview_positioned_relativeTo(
+            &glass,
+            if anchor.is_some() {
+                NSWindowOrderingMode::Above
+            } else {
+                NSWindowOrderingMode::Below
+            },
+            anchor,
+        );
+        if rect.panel {
+            panel = Some(glass);
+        }
+    }
+    true
 }
 
 fn glass_windows() -> &'static Mutex<HashSet<String>> {
