@@ -22,7 +22,7 @@ async function readPackage(path: string): Promise<string> {
   }
 }
 
-const requestPath = process.argv[2] || 'MailPort-demo.mailportrequest';
+const requestPath = process.argv[2] || 'MailPort-demo.mailport-request';
 const session = await ImportRequestSession.create('MailPort Demo Receiver');
 const terminal = createInterface({ input: stdin, output: stdout });
 const signal = AbortSignal.timeout(Math.max(0, session.expiresAt * 1000 - Date.now()));

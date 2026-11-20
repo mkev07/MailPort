@@ -101,6 +101,8 @@ pub fn run() {
             window::system_accent_color,
             vault::vault_status,
             vault::vault_session_active,
+            vault::vault_auto_lock_state,
+            vault::vault_set_auto_lock_paused,
             vault::vault_create,
             discovery::discover_mail_servers,
             vault::vault_unlock,

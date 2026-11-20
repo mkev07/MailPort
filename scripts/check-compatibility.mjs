@@ -95,6 +95,27 @@ await assert.rejects(
   { code: "INVALID_TRANSFER_PACKAGE" },
 );
 wrongReceiver.close();
+const cancelledReceiver = await ImportRequestSession.create("Cancelled Client");
+const cancelledTransfer = JSON.parse(rust(["seal-transfer"], JSON.stringify({
+  requestFile: cancelledReceiver.requestFile,
+  accounts,
+  ids: selected.map(({ id }) => id),
+})));
+const cancelledCalls = [];
+const controller = new AbortController();
+controller.abort();
+const cancelledOptions = {
+  serialized: cancelledTransfer.package,
+  verifiedCode: cancelledTransfer.packageCode,
+  adapter: { async upsertAccount(account) { cancelledCalls.push(account.id); } },
+};
+assert.deepEqual(await cancelledReceiver.importPackage({ ...cancelledOptions, signal: controller.signal }), {
+  completed: false,
+  results: selected.map(({ id }) => ({ accountId: id, status: "cancelled" })),
+});
+assert.equal(cancelledCalls.length, 0);
+assert.equal((await cancelledReceiver.importPackage(cancelledOptions)).completed, true);
+assert.deepEqual(cancelledCalls, selected.map(({ id }) => id));
 await assert.rejects(receiver.importPackage({ ...options, verifiedCode: "UNKNOWN" }), { code: "CODE_MISMATCH" });
 assert.equal(calls.length, 0);
 

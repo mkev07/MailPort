@@ -23,7 +23,10 @@
 
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::ffi::{c_char, c_int, c_void, OsStr};
+#[cfg(debug_assertions)]
+use std::ffi::OsStr;
+use std::ffi::{c_char, c_int, c_void};
+#[cfg(debug_assertions)]
 use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -832,6 +835,7 @@ pub(crate) fn ensure_dev_bundle(version: &str, bundle_version: &str) {
     }
 }
 
+#[cfg(debug_assertions)]
 fn existing_bundle_root_from_exe(exe: &Path) -> Option<(std::path::PathBuf, String)> {
     let app = exe.parent()?.parent()?.parent()?.to_path_buf();
     let app_name = bundle_name_from_app_path(&app)?;
@@ -840,6 +844,7 @@ fn existing_bundle_root_from_exe(exe: &Path) -> Option<(std::path::PathBuf, Stri
         .then_some((app, app_name))
 }
 
+#[cfg(debug_assertions)]
 fn relaunch_from_dev_bundle(version: &str, bundle_version: &str) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;

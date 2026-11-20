@@ -22,7 +22,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
-    "test": "tsx --test test/import.test.ts test/vault.test.ts",
+    "test": "tsx --test test/import.test.ts test/vault.test.ts test/transfer.test.ts",
     "demo": "tsx examples/roundtrip.ts",
     "demo:transfer": "tsx examples/receive-transfer.ts",
     "check": "npm run typecheck && npm test && npm run build && npm run demo"

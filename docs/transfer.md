@@ -5,7 +5,7 @@ package files plus two comparisons on trusted displays or channels. Both apps
 must keep the verification prompts visible until the comparison is complete.
 
 1. The receiving client creates a fresh X25519 key pair, saves the public import
-   request as `.mailportrequest`, and displays the request code. Keep the private
+   request as `.mailport-request`, and displays the request code. Keep the private
    key inside that receiving session.
 2. In MailPort Vault, choose the accounts and open the request. Check the request
    code against the receiving client before approving the transfer. The displayed
@@ -96,7 +96,7 @@ one-time use by discarding its private key.
 From the repository root:
 
 ```sh
-npm run demo:transfer --workspace @mailport/sdk -- "$HOME/Downloads/MailPort-demo.mailportrequest"
+npm run demo:transfer --workspace @mailport/sdk -- "$HOME/Downloads/MailPort-demo.mailport-request"
 ```
 
 Leave the receiver running. In MailPort Vault select sample accounts, click

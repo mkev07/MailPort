@@ -44,6 +44,12 @@ type Server = {
   username: string;
   auth: Auth;
 };
+type Connection = {
+  host: string;
+  port: number;
+  security: "tls" | "starttls";
+  username: string;
+};
 type Account = {
   id: string;
   email: string;
@@ -55,8 +61,8 @@ type Summary = {
   id: string;
   email: string;
   displayName: string;
-  incomingHost: string;
-  outgoingHost: string;
+  incoming: Connection;
+  outgoing: Connection;
   requiresSignIn: boolean;
   profileId: string | null;
 };
@@ -70,17 +76,29 @@ type Status = {
   onePasswordAvailable: boolean;
   onePasswordEnabled: boolean;
 };
+type AutoLockState = { remainingSeconds: number; paused: boolean };
 type QuickMethod = "touchId" | "onePassword";
 type ExportRecipient = {
   requestFile: string;
   clientName: string;
   verificationCode: string;
 };
-type SavedTransfer = { code: string; folderName: string | null };
+type SavedTransfer = {
+  code: string;
+  fileName: string;
+  folderName: string | null;
+};
 type TransferPane =
   | { stage: "request" }
   | { stage: "review"; recipient: ExportRecipient }
   | ({ stage: "saved" } & SavedTransfer);
+const securityLabels: Record<Connection["security"], string> = {
+  tls: "TLS",
+  starttls: "STARTTLS",
+};
+function securityLabel(security: Connection["security"]) {
+  return securityLabels[security] ?? security.toUpperCase();
+}
 function Icon({
   name,
   size = 20,
@@ -179,11 +197,13 @@ function Icon({
 function AccountProfilePicker({
   profiles,
   profileId,
+  email,
   disabled,
   onChoose,
 }: {
   profiles: Profile[];
   profileId: string | null;
+  email: string;
   disabled: boolean;
   onChoose: (id: string | null) => void;
 }) {
@@ -244,7 +264,18 @@ function AccountProfilePicker({
         disabled={disabled}
         onClick={() => setOpen(!open)}
       >
-        {avatar(current)}
+        <EmailAvatar
+          email={email}
+          lookup
+          className="account-card-email-avatar"
+        />
+        {current && (
+          <span
+            className="account-profile-dot"
+            style={{ background: current.color }}
+            aria-hidden="true"
+          />
+        )}
       </button>
       {open && (
         <div className="account-profile-popover">
@@ -1353,6 +1384,112 @@ function AppearanceSlider({ id, theme, label, value, onChange }: {
   );
 }
 
+function AccountServer({
+  protocol,
+  label,
+  server,
+}: {
+  protocol: string;
+  label: string;
+  server: Connection;
+}) {
+  return (
+    <section className="account-card-server" aria-label={`${label} mail`}>
+      <h3>
+        <span className="account-card-protocol">{protocol}</span>
+        {label}
+      </h3>
+      <code className="account-card-host">{server.host}</code>
+      <dl>
+        <div>
+          <dt>Port</dt>
+          <dd>{server.port}</dd>
+        </div>
+        <div>
+          <dt>Security</dt>
+          <dd>{securityLabel(server.security)}</dd>
+        </div>
+        <div>
+          <dt>Username</dt>
+          <dd><code>{server.username}</code></dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+function AccountDetailCard({
+  account,
+  profiles,
+  busy,
+  selected,
+  onEdit,
+  onChooseProfile,
+}: {
+  account: Summary;
+  profiles: Profile[];
+  busy: boolean;
+  selected: boolean;
+  onEdit: () => void;
+  onChooseProfile: (profileId: string | null) => void;
+}) {
+  const headingId = `account-card-heading-${account.id}`;
+  return (
+    <article
+      className="account-card"
+      aria-labelledby={headingId}
+      data-selected={selected ? "" : undefined}
+    >
+      <header className="account-card-header">
+        {profiles.length > 0 ? (
+          <AccountProfilePicker
+            key={account.id}
+            profiles={profiles}
+            profileId={account.profileId}
+            email={account.email}
+            disabled={busy}
+            onChoose={onChooseProfile}
+          />
+        ) : (
+          <span className="profile-avatar account-card-avatar" aria-hidden="true">
+            <Icon name="mail" size={24} />
+          </span>
+        )}
+        <div className="account-card-identity">
+          <h2 id={headingId}>{account.displayName || account.email}</h2>
+          {account.displayName && <p>{account.email}</p>}
+        </div>
+        <button
+          className="secondary account-card-edit"
+          data-edit-id={account.id}
+          data-control-glass
+          disabled={busy}
+          onClick={onEdit}
+        >
+          <Icon name="edit" size={16} /> Edit
+        </button>
+      </header>
+      <div className="account-card-servers">
+        <AccountServer protocol="IMAP" label="Incoming" server={account.incoming} />
+        <AccountServer protocol="SMTP" label="Outgoing" server={account.outgoing} />
+      </div>
+      <footer className="account-card-footer">
+        <span>Authentication</span>
+        <span className="account-card-auth">
+          <span
+            className="account-card-status"
+            data-pending={account.requiresSignIn ? "" : undefined}
+            aria-hidden="true"
+          />
+          {account.requiresSignIn
+            ? "Sign in with your provider"
+            : "Password saved in MailPort"}
+        </span>
+      </footer>
+    </article>
+  );
+}
+
 export default function App() {
   const [light, setLight] = useState(isLightScheme);
   const [buttonPalette, setButtonPalette] = useState(loadButtonPalette);
@@ -1408,6 +1545,12 @@ export default function App() {
   }, []);
   const nextTheme = light ? "dark" : "light";
   const [status, setStatus] = useState<Status | null>(null);
+  const [autoLock, setAutoLock] = useState<AutoLockState | null>(null);
+  const [autoLockBusy, setAutoLockBusy] = useState(false);
+  const [autoLockHover, setAutoLockHover] = useState(false);
+  const [autoLockFocus, setAutoLockFocus] = useState(false);
+  const autoLockChanging = useRef(false);
+  const autoLockRevision = useRef(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [passphraseState, setPassphraseState] = useState<
@@ -1431,6 +1574,8 @@ export default function App() {
     profileId: string | null;
   }>();
   const [activeId, setActiveId] = useState<string>();
+  const [scrollAccount, setScrollAccount] = useState<{ id: string }>();
+  const detailPane = useRef<HTMLElement>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [unlockSettings, setUnlockSettings] = useState(false);
   const [editor, setEditor] = useState<Account | null>(null);
@@ -1503,6 +1648,7 @@ export default function App() {
     if (fromPoll && manualUnlock.current) return;
     setStatus(next);
     if (!next.unlocked) {
+      setAutoLock(null);
       toast.dismiss();
       setUnlockSettings(false);
       setActiveId(undefined);
@@ -1530,17 +1676,21 @@ export default function App() {
     const timer = window.setInterval(() => {
       const update = async () => {
         if (manualUnlock.current) return;
-        if (
-          !statusRef.current?.unlocked ||
-          !(await invoke<boolean>("vault_session_active"))
-        ) {
+        if (!statusRef.current?.unlocked) {
           await refresh(true);
+        } else if (!autoLockChanging.current) {
+          const revision = autoLockRevision.current;
+          const state = await invoke<AutoLockState | null>("vault_auto_lock_state");
+          if (autoLockChanging.current || revision !== autoLockRevision.current) return;
+          if (state) setAutoLock(state);
+          else await refresh(true);
         }
       };
       void update().catch(() => {});
-    }, 2000);
+    }, 1000);
     let touched = 0;
-    const touch = () => {
+    const touch = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest(".auto-lock-control")) return;
       if (statusRef.current?.unlocked && Date.now() - touched > 15000) {
         touched = Date.now();
         void invoke("vault_touch").catch(() => {});
@@ -1556,6 +1706,21 @@ export default function App() {
       document.removeEventListener("keydown", touch);
     };
   }, []);
+  const toggleAutoLock = async () => {
+    if (!autoLock || autoLockChanging.current) return;
+    autoLockRevision.current += 1;
+    autoLockChanging.current = true;
+    setAutoLockBusy(true);
+    try {
+      setAutoLock(await invoke<AutoLockState>("vault_set_auto_lock_paused", { paused: !autoLock.paused }));
+    } catch {
+      setError("Could not change auto-lock. Check the vault and try again.");
+      await refresh().catch(() => {});
+    } finally {
+      autoLockChanging.current = false;
+      setAutoLockBusy(false);
+    }
+  };
   const editing = editor !== null;
   const isMac = document.documentElement.classList.contains("is-mac");
   useEffect(() => {
@@ -1685,6 +1850,11 @@ export default function App() {
       await invoke("vault_lock");
     });
   };
+  const openAccount = (id: string) => {
+    setUnlockSettings(false);
+    setActiveId(id);
+    setScrollAccount({ id });
+  };
   const edit = (id?: string, trigger = "#add-account") => {
     returnFocus.current = id ? `[data-edit-id="${id}"]` : trigger;
     setModalError("");
@@ -1758,10 +1928,25 @@ export default function App() {
     : allAccounts;
   const active =
     accounts.find((account) => account.id === activeId) ?? accounts[0];
+  const visibleCards = accounts.filter(
+    (account) => account.id === active?.id || selected.includes(account.id),
+  );
   const selectedAccounts = allAccounts.filter(({ id }) =>
     selected.includes(id),
   );
   const hasSelection = selectedAccounts.length > 0;
+  useEffect(() => {
+    if (!scrollAccount) return;
+    const pane = detailPane.current;
+    const card = document.getElementById(`account-card-heading-${scrollAccount.id}`)?.closest(".account-card");
+    if (!pane || !card) return;
+    pane.scrollTo({
+      top: pane.scrollTop + card.getBoundingClientRect().top - pane.getBoundingClientRect().top - 24,
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  }, [scrollAccount]);
   useEffect(() => {
     if (!hasSelection) {
       transferFocus.current = null;
@@ -2191,6 +2376,34 @@ export default function App() {
                   </span>
                   <span className="profile-link-label">Lock vault</span>
                 </button>
+                <div
+                  className={`auto-lock-control${autoLockHover || autoLockFocus ? " is-revealed" : ""}`}
+                  aria-label="Auto-lock timer"
+                >
+                  <span className="auto-lock-time" aria-label={autoLock?.paused ? "Auto-lock paused" : "Time until auto-lock"}>
+                    {autoLock ? `${Math.floor(autoLock.remainingSeconds / 60)}:${String(autoLock.remainingSeconds % 60).padStart(2, "0")}` : "–:––"}
+                  </span>
+                  <button
+                    type="button"
+                    className="auto-lock-pause"
+                    data-control-glass
+                    aria-label={autoLock?.paused ? "Resume auto-lock" : "Pause auto-lock"}
+                    aria-pressed={autoLock?.paused ?? false}
+                    title={autoLock?.paused ? "Resume auto-lock" : "Pause auto-lock"}
+                    disabled={!autoLock || autoLockBusy || busy}
+                    onPointerEnter={(event) => { if (event.pointerType !== "touch") setAutoLockHover(true); }}
+                    onPointerLeave={() => setAutoLockHover(false)}
+                    onFocus={() => setAutoLockFocus(true)}
+                    onBlur={() => setAutoLockFocus(false)}
+                    onClick={() => void toggleAutoLock()}
+                  >
+                    {autoLock?.paused ? (
+                      <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M3.5 2.2 9.5 6l-6 3.8z" fill="currentColor" /></svg>
+                    ) : (
+                      <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M3.4 2.2h1.8v7.6H3.4zm3.4 0h1.8v7.6H6.8z" fill="currentColor" /></svg>
+                    )}
+                  </button>
+                </div>
               </div>
             </nav>
             <section className="account-pane" aria-labelledby="account-heading">
@@ -2306,8 +2519,7 @@ export default function App() {
                               : account.email
                           }
                           onClick={() => {
-                            setUnlockSettings(false);
-                            setActiveId(account.id);
+                            openAccount(account.id);
                           }}
                         >
                           <strong>
@@ -2395,7 +2607,7 @@ export default function App() {
                 </footer>
               )}
             </section>
-            <section className="detail-pane" aria-label="Account details">
+            <section ref={detailPane} className="detail-pane" aria-label="Account details">
               {error && (
                 <p className="error-banner" role="alert">
                   {error}
@@ -2592,62 +2804,19 @@ export default function App() {
                   />
                 </section>
               ) : active ? (
-                <section
-                  className="detail-page"
-                  aria-labelledby="active-account-heading"
-                >
-                  <div className="detail-heading">
-                    <div
-                      className="account-heading-title"
-                      data-has-email={active.displayName ? "" : undefined}
-                    >
-                      {profiles.length > 0 && (
-                        <AccountProfilePicker
-                          key={active.id}
-                          profiles={profiles}
-                          profileId={active.profileId}
-                          disabled={busy}
-                          onChoose={(id) => moveAccount(active.id, id)}
-                        />
-                      )}
-                      <div className="account-heading-text">
-                        <h2 id="active-account-heading">
-                          {active.displayName || active.email}
-                        </h2>
-                        {active.displayName && (
-                          <p className="detail-email">{active.email}</p>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      className="secondary"
-                      data-edit-id={active.id}
-                      data-control-glass
-                      disabled={busy}
-                      onClick={() => edit(active.id)}
-                    >
-                      <Icon name="edit" size={16} /> Edit
-                    </button>
-                  </div>
-                  <dl className="account-details">
-                    <div className="detail-section account-server-details">
-                      <dt>Incoming (IMAP)</dt>
-                      <dd>{active.incomingHost}</dd>
-                    </div>
-                    <div className="detail-section account-server-details">
-                      <dt>Outgoing (SMTP)</dt>
-                      <dd>{active.outgoingHost}</dd>
-                    </div>
-                    <div className="detail-section">
-                      <dt>Authentication</dt>
-                      <dd>
-                        {active.requiresSignIn
-                          ? "Sign in through your email client"
-                          : "Password saved"}
-                      </dd>
-                    </div>
-                  </dl>
-                </section>
+                <div className="account-feed">
+                  {visibleCards.map((account) => (
+                    <AccountDetailCard
+                      key={account.id}
+                      account={account}
+                      profiles={profiles}
+                      busy={busy}
+                      selected={selected.includes(account.id)}
+                      onEdit={() => edit(account.id)}
+                      onChooseProfile={(id) => moveAccount(account.id, id)}
+                    />
+                  ))}
+                </div>
               ) : (
                 <div className="empty-state">
                   <h2>
@@ -2736,15 +2905,20 @@ export default function App() {
                   </div>
                 )}
                 {!exportCollapsed && (
-                  <img
-                    ref={transferDocument}
-                    className="export-package-icon"
-                    src="/mailport-document.png"
-                    alt=""
-                    width={96}
-                    height={96}
-                    draggable={false}
-                  />
+                  <div className="export-package">
+                    <img
+                      ref={transferDocument}
+                      className="export-package-icon"
+                      src="/mailport-document.png"
+                      alt=""
+                      width={96}
+                      height={96}
+                      draggable={false}
+                    />
+                    <p className="export-package-type">
+                      Encrypted <code>.mailport</code> package
+                    </p>
+                  </div>
                 )}
                 {!exportCollapsed && transfer ? (
                   <section className="transfer-panel" aria-labelledby="export-stage-heading">
@@ -2755,7 +2929,7 @@ export default function App() {
                       {transfer.stage === "request" && (
                         <ol className="transfer-steps">
                           <li>In your email app, choose <strong>Import from MailPort</strong>.</li>
-                          <li>Back in MailPort, click <strong>Open import file</strong> and select the file your email app created.</li>
+                          <li>Click <strong>Open import file</strong> and choose the <code>.mailport-request</code> file your email app created.</li>
                           <li>Compare the codes in both apps. If they match, click <strong>Codes match · Save</strong>.</li>
                         </ol>
                       )}
@@ -2780,10 +2954,10 @@ export default function App() {
                           <p className="transfer-location">
                             <span ref={transferFolder}><Icon name="folder" size={16} /></span>
                             <span>
-                              {transfer.folderName ? <>Saved to <strong>{transfer.folderName}</strong></> : "Saved to your chosen folder"}
+                              {transfer.folderName ? <>Saved <strong>{transfer.fileName}</strong> to <strong>{transfer.folderName}</strong></> : <>Saved <strong>{transfer.fileName}</strong></>}
                             </span>
                           </p>
-                          <p>Open the saved file in your email app and check that this code matches.</p>
+                          <p>Open <strong>{transfer.fileName}</strong> in your email app and check that this code matches.</p>
                           <code className="transfer-code">{transfer.code}</code>
                         </>
                       )}

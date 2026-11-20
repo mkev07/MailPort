@@ -66,7 +66,8 @@ The Tauri backend owns vault file paths, unlocked account state and native expor
 dialogs. The frontend receives summaries and redacted account edit data, and sends
 newly entered secrets over local IPC. No filesystem plugin is exposed to the UI;
 there is no asset protocol exposing the application data directory. The production
-CSP allows local bundled scripts and local Tauri IPC, and no remote hosts. Window
+CSP allows local bundled scripts and local Tauri IPC; account avatar images may
+be loaded from Gravatar using an email-address hash. Window
 capabilities apply to the main window only. Development source-picking tooling is
 not included. The Rust master passphrase and account types clear owned buffers on
 drop where supported; the frontend and crypto libraries may still hold copies.
