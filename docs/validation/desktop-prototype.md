@@ -41,8 +41,10 @@ wake the Mac or switch away and back. Confirm the vault requires a fresh unlock
 in both cases. A screen lock without sleep or a session switch requires
 separate acceptance.
 
-Native release signing/notarization, independent security review, and live
-provider compatibility remain release gates. The Mailspring and Thunderbird
+The [Apple Silicon release candidate](macos-release.md) passed Developer ID
+signature and notarization checks. Fresh-install runtime acceptance, release
+packaging on other targets, independent security review, and live provider
+compatibility remain open. The Mailspring and Thunderbird
 previews have imported synthetic accounts and sent and received messages
 against controlled servers. Their distribution readiness remains open.
 

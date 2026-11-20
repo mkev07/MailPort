@@ -36,6 +36,7 @@ The mixed-transfer check verifies that the preview saves the password account
 and displays the OAuth address under **Sign in separately**. The preview uses
 that list for the current import screen. Provider sign-in happens through
 Mailspring's regular account setup.
+[Windows run with all eight scenarios](https://github.com/mkev07/MailPort/actions/runs/44751319648/job/136339646071)
 
 All seven cases also passed on Debian 13 ARM64 in Docker with Xvfb, a D-Bus
 session, and an unlocked GNOME Keyring. The clean install compiled SQLite with
