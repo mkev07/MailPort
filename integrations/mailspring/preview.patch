@@ -582,3 +582,21 @@ index 68f58cf..1e28302 100644
  }
  
  function addSourceURL(jsCode, filePath) {
+diff --git a/app/static/index.js b/app/static/index.js
+index b6ce24e..76f52f2 100644
+--- a/app/static/index.js
++++ b/app/static/index.js
+@@ -82,6 +82,13 @@ function setupWindow(loadSettings) {
+     copyEnvFromMainProcess();
+   }
+ 
++  if (process.platform === 'win32' && loadSettings.devMode) {
++    // Read only the preview flag. Windows renderers do not reliably inherit it.
++    const preview = require('@electron/remote').process.env.MAILPORT_PREVIEW;
++    if (preview === '1') process.env.MAILPORT_PREVIEW = '1';
++    else delete process.env.MAILPORT_PREVIEW;
++  }
++
+   if (loadSettings.devMode) {
+     var CompileCache = require('../src/compile-cache-ts');
+     CompileCache.setHomeDirectory(loadSettings.configDirPath);
