@@ -1,0 +1,70 @@
+name: Mailspring recovery
+
+on:
+  pull_request:
+    paths:
+      - '.gitattributes'
+      - '.github/workflows/mailspring-recovery.yml'
+      - 'integrations/mailspring/**'
+      - 'docs/vectors/**'
+      - 'packages/sdk/**'
+      - 'packages/vault-core/**'
+      - 'package-lock.json'
+      - 'package.json'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-recovery:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare preview and synthetic sender
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          git config --global url.https://github.com/.insteadOf ssh://git@github.com/
+          git config --global --add url.https://github.com/.insteadOf git@github.com:
+          $checkout = Join-Path $env:RUNNER_TEMP 'mailspring-preview'
+          git init $checkout
+          git -C $checkout config core.autocrlf false
+          git -C $checkout fetch --depth=1 https://github.com/Foundry376/Mailspring.git 0635d327398c8d97255660ae7b0011bf1e3fe4df
+          git -C $checkout checkout --detach FETCH_HEAD
+          npm ci
+          node integrations/mailspring/prepare-preview.mjs $checkout
+          cargo build --locked -p mailport-core --example compatibility
+      - name: Install Mailspring and its sync engine
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          Set-Location (Join-Path $env:RUNNER_TEMP 'mailspring-preview')
+          npx --yes --package npm@10.9.8 -c 'npm ci --no-audit'
+          if (!(Test-Path 'app/mailsync.exe')) { throw 'Mailspring did not install its sync engine' }
+          if (!(Test-Path 'app/internal_packages/onboarding/lib/page-mailport-import.tsx') -or
+              !(Test-Path 'app/internal_packages/onboarding/lib/mailport-sdk.cjs')) {
+            throw 'The MailPort preview importer or SDK bundle is missing'
+          }
+      - name: Run synthetic UI recovery scenarios
+        shell: pwsh
+        run: |
+          $checkout = Join-Path $env:RUNNER_TEMP 'mailspring-preview'
+          foreach ($scenario in @('success', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race')) {
+            node integrations/mailspring/check-import-ui.cjs $checkout $scenario
+            if ($LASTEXITCODE -ne 0) { throw "Mailspring recovery failed: $scenario" }
+          }

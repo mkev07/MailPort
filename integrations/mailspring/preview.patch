@@ -1,5 +1,5 @@
 diff --git a/app/internal_packages/onboarding/lib/main.ts b/app/internal_packages/onboarding/lib/main.ts
-index f1d0eb3..93faa07 100644
+index f1d0eb3..7ee2705 100644
 --- a/app/internal_packages/onboarding/lib/main.ts
 +++ b/app/internal_packages/onboarding/lib/main.ts
 @@ -12,7 +12,7 @@ export function activate() {
@@ -7,7 +7,7 @@ index f1d0eb3..93faa07 100644
    const accounts = AppEnv.config.get('accounts') || [];
  
 -  if (accounts.length === 0) {
-+  if (accounts.length === 0 && !process.env.MAILPORT_PREVIEW) {
++  if (accounts.length === 0 && !AppEnv.config.isMailPortPreview()) {
      const startService = new SystemStartService();
      startService.checkAvailability().then((available) => {
        if (!available) {
@@ -45,7 +45,7 @@ index f614729..00bbc90 100644
    'initial-preferences': InitialPreferencesPage,
    'initial-subscription': InitialSubscriptionPage,
 diff --git a/app/internal_packages/onboarding/lib/onboarding-store.ts b/app/internal_packages/onboarding/lib/onboarding-store.ts
-index b42d208..343d93b 100644
+index b42d208..5e6303e 100644
 --- a/app/internal_packages/onboarding/lib/onboarding-store.ts
 +++ b/app/internal_packages/onboarding/lib/onboarding-store.ts
 @@ -40,7 +40,10 @@ class OnboardingStore extends MailspringStore {
@@ -53,7 +53,7 @@ index b42d208..343d93b 100644
      });
  
 -    if (existingAccountJSON) {
-+    if (process.env.MAILPORT_PREVIEW && !hasAccounts) {
++    if (AppEnv.config.isMailPortPreview() && !hasAccounts) {
 +      // Isolated synthetic-data preview only; never bypass sign-in in normal builds.
 +      this._pageStack = ['account-choose', 'mailport-import'];
 +    } else if (existingAccountJSON) {
@@ -61,14 +61,14 @@ index b42d208..343d93b 100644
        // to the best page with the most details
        this._account = new Account({}).fromJSON(existingAccountJSON);
 diff --git a/app/internal_packages/onboarding/lib/page-account-choose.tsx b/app/internal_packages/onboarding/lib/page-account-choose.tsx
-index 988bd80..ada724f 100644
+index 988bd80..d0e7a34 100644
 --- a/app/internal_packages/onboarding/lib/page-account-choose.tsx
 +++ b/app/internal_packages/onboarding/lib/page-account-choose.tsx
 @@ -27,6 +27,11 @@ export default class AccountChoosePage extends React.Component<{ account?: objec
        <div className="page account-choose">
          <h2>{localized('Connect an email account')}</h2>
          <div className="provider-list">{this._renderProviders()}</div>
-+        {process.env.MAILPORT_PREVIEW === '1' && (
++        {AppEnv.config.isMailPortPreview() && (
 +          <button type="button" onClick={() => OnboardingActions.moveToPage('mailport-import')}>
 +            Import from MailPort
 +          </button>
@@ -77,26 +77,29 @@ index 988bd80..ada724f 100644
      );
    }
 diff --git a/app/src/browser/config-persistence-manager.ts b/app/src/browser/config-persistence-manager.ts
-index 19c4c20..daf9137 100644
+index 19c4c20..9941c9a 100644
 --- a/app/src/browser/config-persistence-manager.ts
 +++ b/app/src/browser/config-persistence-manager.ts
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,8 @@
  import path from 'path';
  import fs from 'fs';
 -import { BrowserWindow, dialog, app } from 'electron';
 +import { randomUUID } from 'crypto';
++import { setTimeout as delay } from 'node:timers/promises';
 +import { BrowserWindow, dialog, app, safeStorage } from 'electron';
  import { atomicWriteFileSync } from '../fs-utils';
  import { localized } from '../intl';
  
-@@ -26,6 +27,17 @@ export default class ConfigPersistenceManager {
+@@ -26,6 +28,19 @@ export default class ConfigPersistenceManager {
  
      this.initializeConfigDirectory();
      this.load();
-+    if (process.env.MAILPORT_PREVIEW === '1' && !this.userWantsToPreserveErrors) {
++    if (this.isMailPortPreview() && !this.userWantsToPreserveErrors) {
 +      this.cleanMailPortStaging();
 +    }
 +  }
++
++  isMailPortPreview = () => global.mailPortPreviewEnabled === true;
 +
 +  private cleanMailPortStaging() {
 +    for (const entry of fs.readdirSync(this.configDirPath)) {
@@ -107,13 +110,13 @@ index 19c4c20..daf9137 100644
    }
  
    initializeConfigDirectory() {
-@@ -156,6 +168,132 @@ export default class ConfigPersistenceManager {
+@@ -156,6 +171,150 @@ export default class ConfigPersistenceManager {
      }
    };
  
 +  // Preview writes publish only after the entire replacement has reached the filesystem.
 +  private writeMailPortSettings = (nextSettings: object) => {
-+    if (process.env.MAILPORT_PREVIEW !== '1' || this.userWantsToPreserveErrors) {
++    if (!this.isMailPortPreview() || this.userWantsToPreserveErrors) {
 +      throw new Error('Preview configuration is unavailable');
 +    }
 +    const staging = `${this.configFilePath}.mailport-${randomUUID()}.tmp`;
@@ -141,6 +144,23 @@ index 19c4c20..daf9137 100644
 +    finally { fs.closeSync(fd); }
 +  }
 +
++  private async waitForMailPortWindowsKey() {
++    // Chromium writes its DPAPI-wrapped key to Local State on a deferred
++    // preference write. A fresh profile can encrypt before that write finishes.
++    const localState = path.join(app.getPath('sessionData'), 'Local State');
++    const deadline = performance.now() + 20000;
++    do {
++      const state = await fs.promises.readFile(localState, 'utf8').catch(error => {
++        if (error.code === 'ENOENT') return '{}';
++        throw error;
++      });
++      const key = JSON.parse(state).os_crypt?.encrypted_key;
++      if (typeof key === 'string' && key.length > 0) return;
++      await delay(100);
++    } while (performance.now() < deadline);
++    throw new Error('Windows secure storage is still initializing. Try importing again.');
++  }
++
 +  replaceMailPortCredentials = (expected: string, encrypted: object) => {
 +    if (JSON.stringify(this.settings['credentials'] ?? null) !== expected) {
 +      throw new Error('Credentials changed during this operation');
@@ -149,7 +169,7 @@ index 19c4c20..daf9137 100644
 +  };
 +
 +  importMailPortAccount = async (json: string) => {
-+    if (process.env.MAILPORT_PREVIEW !== '1') throw new Error('Preview is unavailable');
++    if (!this.isMailPortPreview()) throw new Error('Preview is unavailable');
 +    const account = JSON.parse(json);
 +    const { imap_password: imap, smtp_password: smtp, ...settings } = account.settings;
 +    if (account.provider !== 'imap' || typeof imap !== 'string' || typeof smtp !== 'string' ||
@@ -194,6 +214,7 @@ index 19c4c20..daf9137 100644
 +      if (process.platform === 'linux' && buffer.subarray(0, 3).toString() === 'v10') {
 +        throw new Error('Secure storage unavailable');
 +      }
++      if (process.platform === 'win32') await this.waitForMailPortWindowsKey();
 +      encrypted = buffer.toJSON();
 +    }
 +    // Encryption yields to other windows. Read current accounts at commit time and
@@ -240,14 +261,74 @@ index 19c4c20..daf9137 100644
    getRawValuesString = () => {
      if (!this.settings || _.isEmpty(this.settings)) {
        throw new Error('this.settings is empty');
+diff --git a/app/src/browser/main.js b/app/src/browser/main.js
+index edaad0a..a9cc631 100644
+--- a/app/src/browser/main.js
++++ b/app/src/browser/main.js
+@@ -113,6 +113,7 @@ const declareOptions = argv => {
+   options.boolean('enable-crashpad');
+   options.boolean('allow-file-access-from-files');
+   options.boolean('source-app-id');
++  options.boolean('mailport-preview');
+   options
+     .alias('h', 'help')
+     .boolean('h')
+@@ -349,6 +350,13 @@ const start = () => {
+   app.commandLine.appendSwitch('js-flags', '--harmony');
+ 
+   const options = parseCommandLine(process.argv);
++  global.mailPortPreviewEnabled = Boolean(
++    options.devMode &&
++    options.configDirPath &&
++    (process.argv.includes('--mailport-preview') || process.env.MAILPORT_PREVIEW === '1')
++  );
++  if (global.mailPortPreviewEnabled) process.env.MAILPORT_PREVIEW = '1';
++  else delete process.env.MAILPORT_PREVIEW;
+   global.errorLogger = setupErrorLogger(options);
+   const configDirPath = setupConfigDir(options);
+   options.configDirPath = configDirPath;
+diff --git a/app/src/compile-cache-ts.js b/app/src/compile-cache-ts.js
+index 68f58cf..1e28302 100644
+--- a/app/src/compile-cache-ts.js
++++ b/app/src/compile-cache-ts.js
+@@ -39,7 +39,24 @@ function writeCachedJavascript(relativeCachePath, code) {
+   const cachePath = path.join(cacheDirectory, relativeCachePath);
+   fs.mkdirSync(path.dirname(cacheTmpPath), { recursive: true });
+   fs.writeFileSync(cacheTmpPath, code, 'utf8');
+-  fs.renameSync(cacheTmpPath, cachePath);
++  try {
++    fs.renameSync(cacheTmpPath, cachePath);
++  } catch (error) {
++    // Windows can lock the cache destination while another renderer reads it.
++    // The preview can still use the JavaScript already compiled in memory.
++    if (
++      process.platform !== 'win32' ||
++      process.env.MAILPORT_PREVIEW !== '1' ||
++      !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)
++    ) {
++      throw error;
++    }
++    try {
++      fs.unlinkSync(cacheTmpPath);
++    } catch {
++      // The disposable cache may still be locked.
++    }
++  }
+ }
+ 
+ function addSourceURL(jsCode, filePath) {
 diff --git a/app/src/config.ts b/app/src/config.ts
-index 3034943..90a589d 100644
+index 3034943..c03676e 100644
 --- a/app/src/config.ts
 +++ b/app/src/config.ts
-@@ -743,6 +743,14 @@ export default class Config {
+@@ -743,6 +743,18 @@ export default class Config {
      }
    }
  
++  isMailPortPreview(): boolean {
++    return app.configPersistenceManager?.isMailPortPreview() === true;
++  }
++
 +  async importMailPortAccount(json: string) {
 +    await app.configPersistenceManager.importMailPortAccount(json);
 +  }
@@ -260,7 +341,7 @@ index 3034943..90a589d 100644
      app.configPersistenceManager.setRawValue(keyPath, value, webContentsId);
      this.load();
 diff --git a/app/src/key-manager.ts b/app/src/key-manager.ts
-index 3fb1181..06a6ed8 100644
+index 3fb1181..ae5f997 100644
 --- a/app/src/key-manager.ts
 +++ b/app/src/key-manager.ts
 @@ -43,6 +43,7 @@ const usesPlaintextFallbackKey = (encrypted: Buffer) =>
@@ -276,7 +357,7 @@ index 3fb1181..06a6ed8 100644
    async _getKeyHash(): Promise<KeySet> {
      const encryptedCredentials = AppEnv.config.get(configCredentialsKey);
 +    const rememberSnapshot = (keys: KeySet) => {
-+      if (process.env.MAILPORT_PREVIEW === '1') {
++      if (AppEnv.config.isMailPortPreview()) {
 +        this._mailPortCredentialSnapshots.set(keys, JSON.stringify(encryptedCredentials ?? null));
 +      }
 +      return keys;
@@ -310,7 +391,7 @@ index 3fb1181..06a6ed8 100644
        throw unavailable();
      }
 -    AppEnv.config.set(configCredentialsKey, encryptedCredentials);
-+    if (process.env.MAILPORT_PREVIEW === '1') {
++    if (AppEnv.config.isMailPortPreview()) {
 +      const expected = this._mailPortCredentialSnapshots.get(keys);
 +      AppEnv.config.replaceMailPortCredentials(expected, encryptedCredentials);
 +      this._mailPortCredentialSnapshots.set(keys, JSON.stringify(encryptedCredentials));
@@ -320,6 +401,24 @@ index 3fb1181..06a6ed8 100644
    }
  
    _reportFatalError(err: Error): never {
+diff --git a/app/static/index.js b/app/static/index.js
+index b6ce24e..af8ea21 100644
+--- a/app/static/index.js
++++ b/app/static/index.js
+@@ -82,6 +82,13 @@ function setupWindow(loadSettings) {
+     copyEnvFromMainProcess();
+   }
+ 
++  if (process.platform === 'win32' && loadSettings.devMode) {
++    // Read only the preview flag. Windows renderers do not reliably inherit it.
++    const preview = require('@electron/remote').getGlobal('mailPortPreviewEnabled');
++    if (preview === true) process.env.MAILPORT_PREVIEW = '1';
++    else delete process.env.MAILPORT_PREVIEW;
++  }
++
+   if (loadSettings.devMode) {
+     var CompileCache = require('../src/compile-cache-ts');
+     CompileCache.setHomeDirectory(loadSettings.configDirPath);
 diff --git a/app/internal_packages/onboarding/lib/mailport-adapter.ts b/app/internal_packages/onboarding/lib/mailport-adapter.ts
 new file mode 100644
 index 0000000..262d2a8

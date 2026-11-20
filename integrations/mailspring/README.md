@@ -9,8 +9,12 @@ attribution before distributing it.
 ## Prepare a local checkout
 
 Install MailPort's dependencies with `npm ci`. Obtain a separate, clean
-Mailspring checkout at commit `0635d327398c8d97255660ae7b0011bf1e3fe4df`, then
-from the MailPort root run:
+Mailspring checkout at commit `0635d327398c8d97255660ae7b0011bf1e3fe4df`.
+On Windows, set `core.autocrlf=false` for the Mailspring checkout before
+checking out that commit so the patch can match the upstream LF source.
+Include `mailspring` in the checkout directory name. The upstream prebuilt
+Mailsync executable checks its path and exits with code 2 if the name is
+missing. Then run from the MailPort root:
 
 ```sh
 node integrations/mailspring/prepare-preview.mjs /path/to/Mailspring
@@ -21,15 +25,22 @@ patch, and builds its local SDK bundle. It builds the bundle before applying the
 patch and refuses to overwrite an existing bundle. If applying or copying fails,
 inspect the checkout before retrying; it may contain a partially prepared preview.
 The patch includes a test-only onboarding
-bypass and disables automatic login-item changes only when `MAILPORT_PREVIEW=1`.
+bypass and disables automatic login-item changes only when the preview is enabled
+for a development build with an explicit profile path.
 It must not be enabled for real credentials or merged upstream as-is.
 
-Install the Mailspring checkout's dependencies following its own instructions.
-In this environment, npm 10 was needed because the checkout's nested install
-failed under npm 11. Run the preview with a dedicated configuration directory:
+Install dependencies from inside the Mailspring checkout. The clean macOS
+setup used Node.js 22 and npm 10.9.8 for both the root install and the nested
+install that runs during `postinstall`:
 
 ```sh
-env -u ELECTRON_RUN_AS_NODE MAILPORT_PREVIEW=1 npm start -- --config-dir-path /tmp/mailport-mailspring-e2e
+npx --yes --package npm@10.9.8 -c 'npm ci --no-audit'
+```
+
+Run the preview with a dedicated configuration directory:
+
+```sh
+env -u ELECTRON_RUN_AS_NODE npm start -- --mailport-preview --config-dir-path /tmp/mailport-mailspring-e2e
 ```
 
 This starts a separate profile for synthetic password accounts. The preview
@@ -64,9 +75,24 @@ for case in success write-error crash-before crash-after legacy-orphan credentia
 done
 ```
 
+In PowerShell, run each case and stop on the first failure:
+
+```powershell
+'success', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race' | ForEach-Object {
+  node integrations/mailspring/check-import-ui.cjs 'C:\src\Mailspring' $_
+  if ($LASTEXITCODE -ne 0) { throw "Mailspring check failed: $_" }
+}
+```
+
 Each check uses its own temporary profile. The crash cases kill only their own
 Electron process just before or just after replacing the configuration file.
 They relaunch Mailspring and complete the import using a fresh transfer.
+On Linux, use a desktop session or a virtual display with an unlocked Secret
+Service keyring. The preview rejects Electron's insecure fallback storage.
+The pinned Linux ARM64 Mailsync download needs glibc 2.38 or newer. Debian 12
+ships glibc 2.36, so use a newer distribution for that binary. When SQLite
+must compile against Electron 44, set `CC=clang CXX=clang++` for the npm install
+with a recent Clang toolchain.
 
 ## Credential read-back from the isolated test profile
 
