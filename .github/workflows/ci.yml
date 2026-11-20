@@ -45,16 +45,24 @@ jobs:
       - run: npm run check:compatibility
   native-build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
             args: '--debug --bundles app'
           - os: windows-latest
-            args: '--debug --config src-tauri/tauri.windows.conf.json --no-bundle'
+            args: '--debug --config src-tauri/tauri.windows.conf.json --bundles nsis'
+            artifact: mailport-vault-windows-preview
+            artifacts: target/debug/bundle/nsis/*.exe
           - os: ubuntu-24.04
-            args: '--debug --config src-tauri/tauri.linux.conf.json --no-bundle'
+            args: '--debug --config src-tauri/tauri.linux.conf.json --bundles deb,appimage'
+            artifact: mailport-vault-linux-preview
+            artifacts: |
+              target/debug/bundle/deb/*.deb
+              target/debug/bundle/appimage/*.AppImage
     runs-on: ${{ matrix.os }}
     env:
+      APPIMAGE_EXTRACT_AND_RUN: '1'
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
     steps:
@@ -69,3 +77,22 @@ jobs:
       - run: npm ci
       - run: npm run vault:build -- ${{ matrix.args }}
       - run: cargo test --locked -p mailport --lib
+      - if: runner.os == 'Linux'
+        name: Check Linux package contents
+        shell: bash
+        run: |
+          for package in target/debug/bundle/deb/*.deb; do
+            dpkg-deb --info "$package"
+            dpkg-deb --extract "$package" "$RUNNER_TEMP/mailport-deb"
+          done
+          test -x "$RUNNER_TEMP/mailport-deb/usr/bin/MailPort"
+          for package in target/debug/bundle/appimage/*.AppImage; do
+            test -x "$package"
+          done
+      - if: matrix.artifact && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+          retention-days: 7

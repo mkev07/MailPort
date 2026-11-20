@@ -30,8 +30,16 @@ synthetic. No provider sign-in, mailbox connection or message sending occurred.
 
 ## Remaining acceptance
 
-Windows and Linux native builds and runtime behavior have not been verified on
-this Mac. CI includes native build jobs for both. Full VoiceOver/screen-reader,
+Windows and Linux native jobs build the NSIS installer and the Debian and
+AppImage packages. The preview artifacts are attached to the pull request's
+CI run when those jobs pass. Use a disposable profile or VM for fresh-install
+checks. On each platform, launch the packaged Vault, create a synthetic vault,
+lock and unlock it, and save a transfer through the native dialog.
+On Windows, also check vault access from another local user account.
+These packages are for preview acceptance. Windows signing and Linux
+distribution verification remain open.
+
+Full VoiceOver/screen-reader,
 keyboard-only end-to-end, zoom/contrast and real five-minute idle acceptance are
 pending. Automated tests cover session expiry and the macOS notification
 subscriptions for system sleep and session deactivation, including clearing a
