@@ -33,9 +33,18 @@ synthetic. No provider sign-in, mailbox connection or message sending occurred.
 Windows and Linux native builds and runtime behavior have not been verified on
 this Mac. CI includes native build jobs for both. Full VoiceOver/screen-reader,
 keyboard-only end-to-end, zoom/contrast and real five-minute idle acceptance are
-pending; only session expiry logic was exercised automatically. OS sleep/lock
-integration, native release signing/notarization, independent security review,
-provider compatibility and two real email clients remain release gates.
+pending. Automated tests cover session expiry and the macOS notification
+subscriptions for system sleep and session deactivation, including clearing a
+paused session through the shared backend lock. To verify physical sleep and
+user switching, unlock a synthetic vault, pause the idle timer, then sleep and
+wake the Mac or switch away and back. Confirm the vault requires a fresh unlock
+in both cases. A screen lock without sleep or a session switch requires
+separate acceptance.
+
+Native release signing/notarization, independent security review, and live
+provider compatibility remain release gates. The Mailspring and Thunderbird
+previews have imported synthetic accounts and sent and received messages
+against controlled servers. Their distribution readiness remains open.
 
 The preview vault contains only synthetic sample accounts. Its disposable
 passphrase is `MailPort-demo-only-2026`. Never reuse this publicly documented

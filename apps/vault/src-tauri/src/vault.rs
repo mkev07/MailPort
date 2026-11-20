@@ -52,6 +52,21 @@ pub struct VaultState {
     touch_id_available: bool,
     lock_generation: AtomicU64,
 }
+impl VaultState {
+    pub(crate) fn lock(&self) -> Result<()> {
+        let mut session = self.session.lock().map_err(|_| "Vault is unavailable.")?;
+        self.lock_generation.fetch_add(1, Ordering::Relaxed);
+        *session = None;
+        Ok(())
+    }
+
+    fn check_lock_generation(&self, generation: u64) -> Result<()> {
+        if generation != self.lock_generation.load(Ordering::Relaxed) {
+            return Err("The vault was locked during this operation. Try again.".into());
+        }
+        Ok(())
+    }
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionSummary {
@@ -202,9 +217,14 @@ pub fn vault_status(state: tauri::State<VaultState>) -> Result<Status> {
 #[tauri::command]
 pub async fn vault_create(app: AppHandle, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
+    let generation = app
+        .state::<VaultState>()
+        .lock_generation
+        .load(Ordering::Relaxed);
     blocking(move || {
         let state = app.state::<VaultState>();
         let mut guard = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+        state.check_lock_generation(generation)?;
         if state.path.exists() {
             return Err("A vault already exists. Unlock it instead.".into());
         }
@@ -225,9 +245,14 @@ pub async fn vault_create(app: AppHandle, password: String) -> Result<()> {
 #[tauri::command]
 pub async fn vault_unlock(app: AppHandle, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
+    let generation = app
+        .state::<VaultState>()
+        .lock_generation
+        .load(Ordering::Relaxed);
     blocking(move || {
         let state = app.state::<VaultState>();
         let mut guard = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+        state.check_lock_generation(generation)?;
         let (accounts, profiles) =
             mailport_core::unlock_local(&mailport_core::read_encrypted(&state.path)?, &password)?;
         *guard = Some(Session {
@@ -250,13 +275,16 @@ pub enum QuickMethod {
 
 #[tauri::command]
 pub async fn vault_quick_unlock(app: AppHandle, method: QuickMethod) -> Result<()> {
+    let generation = app
+        .state::<VaultState>()
+        .lock_generation
+        .load(Ordering::Relaxed);
     blocking(move || {
         let state = app.state::<VaultState>();
         let _operation = state
             .quick_operation
             .try_lock()
             .map_err(|_| "An unlock request is already in progress.")?;
-        let generation = state.lock_generation.load(Ordering::Relaxed);
         let (touch_id, reference) = {
             let preferences = state
                 .quick_preferences
@@ -370,10 +398,7 @@ pub async fn vault_configure_quick_unlock(
 
 #[tauri::command]
 pub fn vault_lock(state: tauri::State<VaultState>) -> Result<()> {
-    let mut session = state.session.lock().map_err(|_| "Vault is unavailable.")?;
-    state.lock_generation.fetch_add(1, Ordering::Relaxed);
-    *session = None;
-    Ok(())
+    state.lock()
 }
 #[tauri::command]
 pub fn vault_account(app: AppHandle, id: String) -> Result<Account> {
@@ -704,6 +729,29 @@ pub fn vault_touch(app: AppHandle) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_lock_clears_a_paused_session_and_invalidates_pending_unlocks() {
+        let state = VaultState {
+            path: PathBuf::new(),
+            session: Mutex::new(Some(Session {
+                accounts: vec![],
+                profiles: Profiles::default(),
+                password: Zeroizing::new("synthetic-session-only".into()),
+                touched: Instant::now(),
+                paused_remaining: Some(IDLE_LIMIT),
+            })),
+            quick_preferences: Mutex::new(quick_unlock::Preferences::default()),
+            quick_operation: Mutex::new(()),
+            touch_id_available: false,
+            lock_generation: AtomicU64::new(0),
+        };
+        state.lock().unwrap();
+        assert!(state.session.lock().unwrap().is_none());
+        assert!(state.check_lock_generation(0).is_err());
+        assert!(state.check_lock_generation(1).is_ok());
+    }
+
     #[test]
     fn idle_sessions_drop_credentials_and_recent_sessions_remain() {
         let make = |touched| {

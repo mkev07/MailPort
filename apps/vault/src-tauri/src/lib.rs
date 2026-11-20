@@ -6,6 +6,8 @@ mod macos;
 mod profiles;
 mod quick_unlock;
 mod vault;
+#[cfg(target_os = "macos")]
+mod vault_lifecycle;
 mod window;
 
 const WINDOW_STATE_FILE: &str = ".window-state-v3.json";
@@ -83,6 +85,8 @@ pub fn run() {
         )
         .setup(|app| {
             vault::setup(app)?;
+            #[cfg(target_os = "macos")]
+            vault_lifecycle::install(app.handle().clone());
             fit_first_launch_window(app);
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {

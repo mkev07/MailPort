@@ -35,8 +35,8 @@ serde.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = { version = "0.6", features = ["exception"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSColor", "NSControl", "NSImage", "NSSlider", "NSUserInterfaceItemIdentification", "NSView", "NSVisualEffectView", "NSWindow", "block2", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSColor", "NSControl", "NSImage", "NSSlider", "NSUserInterfaceItemIdentification", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace", "block2", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSNotification", "NSOperation", "NSString", "block2", "objc2-core-foundation"] }
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "objc2-core-foundation", "objc2-core-graphics"] }
 raw-window-handle = "0.6"
 core-foundation = "0.10"

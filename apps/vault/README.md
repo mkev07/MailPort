@@ -36,10 +36,11 @@ Passwords newly entered and passphrases pass through the webview/IPC; JavaScript
 cannot guarantee erasure of every runtime copy. Inputs and forms are cleared on
 successful submission, close, or lock where applicable.
 
-Sessions lock after five minutes without interface activity. The UI reports
-backend lock state on a short polling interval. This is not yet verified as an
-OS sleep/session-lock integration. Quitting drops the in-memory session.
-The app is single-instance on desktop to avoid competing writers.
+Sessions lock after five minutes without interface activity. On macOS,
+system sleep and user-session deactivation also lock the Vault, even when
+the idle timer is paused. The UI reports backend lock state on a short
+polling interval. Quitting drops the in-memory session. The app is
+single-instance on desktop to avoid competing writers.
 
 Encrypted writes use a temporary file in the same directory followed by atomic
 replacement. On Unix, the app directory is mode 0700 and encrypted files are mode
