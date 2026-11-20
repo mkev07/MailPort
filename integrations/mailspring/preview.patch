@@ -552,3 +552,33 @@ index 0000000..95511e4
 +  await assert.rejects(adapter.upsertAccount(sample()), /Synthetic write failed/);
 +  assert.equal(attempts, 1);
 +});
+diff --git a/app/src/compile-cache-ts.js b/app/src/compile-cache-ts.js
+index 68f58cf..1e28302 100644
+--- a/app/src/compile-cache-ts.js
++++ b/app/src/compile-cache-ts.js
+@@ -39,7 +39,24 @@ function writeCachedJavascript(relativeCachePath, code) {
+   const cachePath = path.join(cacheDirectory, relativeCachePath);
+   fs.mkdirSync(path.dirname(cacheTmpPath), { recursive: true });
+   fs.writeFileSync(cacheTmpPath, code, 'utf8');
+-  fs.renameSync(cacheTmpPath, cachePath);
++  try {
++    fs.renameSync(cacheTmpPath, cachePath);
++  } catch (error) {
++    // Windows can lock the cache destination while another renderer reads it.
++    // The preview can still use the JavaScript already compiled in memory.
++    if (
++      process.platform !== 'win32' ||
++      process.env.MAILPORT_PREVIEW !== '1' ||
++      !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)
++    ) {
++      throw error;
++    }
++    try {
++      fs.unlinkSync(cacheTmpPath);
++    } catch {
++      // The disposable cache may still be locked.
++    }
++  }
+ }
+ 
+ function addSourceURL(jsCode, filePath) {
