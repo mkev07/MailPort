@@ -28,22 +28,26 @@ synthetic. No provider sign-in, mailbox connection or message sending occurred.
 - Quit and reopened the rebuilt app; it started locked and the five accounts plus saved edit survived correct unlock.
 - Escape dismissed the editor and keyboard focus returned to its Edit button. The export dialog focused its password field and displayed accessible labels.
 
+## Windows and Linux preview packaging
+
+- Windows CI silently installed the NSIS package into a temporary directory
+  and verified that the installed app opened a native window.
+- On Ubuntu 24.04, CI launched the extracted Debian executable and the
+  AppImage in extract-and-run mode. Each initialized a separate application
+  profile under Xvfb and D-Bus and stayed running through the startup check.
+
+The Windows and Linux jobs on `40fb45b` uploaded the
+`mailport-vault-windows-preview` and `mailport-vault-linux-preview` artifacts.
+[Hosted checks and downloads](https://github.com/mkev07/MailPort/actions/runs/44757263072)
+
 ## Remaining acceptance
 
-Windows and Linux native jobs build the NSIS installer and the Debian and
-AppImage packages. The preview artifacts are attached to the pull request's
-CI run when those jobs pass. The first packaging run produced both artifact
-sets on `3378823`.
-[Hosted packaging run](https://github.com/mkev07/MailPort/actions/runs/44753169408)
-
-The CI launch checks use a temporary Windows install directory and separate
-Linux application data directories. These checks cover startup. Use a
-disposable profile or VM for fresh-install
-checks. On each platform, launch the packaged Vault, create a synthetic vault,
+Use a disposable OS user account or VM for fresh-install checks. On each
+platform, launch the packaged Vault, create a synthetic vault,
 lock and unlock it, and save a transfer through the native dialog.
-On Windows, also check vault access from another local user account.
-These packages are for preview acceptance. Windows signing and Linux
-distribution verification remain open.
+On Windows, also check vault access from another local user account. On Linux,
+install the Debian package with the package manager and try the AppImage with
+FUSE on a desktop session. Windows signing remains open.
 
 Full VoiceOver/screen-reader,
 keyboard-only end-to-end, zoom/contrast and real five-minute idle acceptance are
