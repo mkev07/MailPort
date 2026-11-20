@@ -273,9 +273,7 @@ index edaad0a..a9cc631 100644
    options
      .alias('h', 'help')
      .boolean('h')
-@@ -349,6 +350,13 @@ const start = () => {
-   app.commandLine.appendSwitch('js-flags', '--harmony');
- 
+@@ -351,4 +352,11 @@ const start = () => {
    const options = parseCommandLine(process.argv);
 +  global.mailPortPreviewEnabled = Boolean(
 +    options.devMode &&
