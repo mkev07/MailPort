@@ -61,30 +61,274 @@ index b42d208..343d93b 100644
        // to the best page with the most details
        this._account = new Account({}).fromJSON(existingAccountJSON);
 diff --git a/app/internal_packages/onboarding/lib/page-account-choose.tsx b/app/internal_packages/onboarding/lib/page-account-choose.tsx
-index 988bd80..44702ac 100644
+index 988bd80..ada724f 100644
 --- a/app/internal_packages/onboarding/lib/page-account-choose.tsx
 +++ b/app/internal_packages/onboarding/lib/page-account-choose.tsx
-@@ -27,6 +27,9 @@ export default class AccountChoosePage extends React.Component<{ account?: objec
+@@ -27,6 +27,11 @@ export default class AccountChoosePage extends React.Component<{ account?: objec
        <div className="page account-choose">
          <h2>{localized('Connect an email account')}</h2>
          <div className="provider-list">{this._renderProviders()}</div>
-+        <button type="button" onClick={() => OnboardingActions.moveToPage('mailport-import')}>
-+          Import from MailPort (preview)
-+        </button>
++        {process.env.MAILPORT_PREVIEW === '1' && (
++          <button type="button" onClick={() => OnboardingActions.moveToPage('mailport-import')}>
++            Import from MailPort
++          </button>
++        )}
        </div>
      );
    }
+diff --git a/app/src/browser/config-persistence-manager.ts b/app/src/browser/config-persistence-manager.ts
+index 19c4c20..daf9137 100644
+--- a/app/src/browser/config-persistence-manager.ts
++++ b/app/src/browser/config-persistence-manager.ts
+@@ -1,6 +1,7 @@
+ import path from 'path';
+ import fs from 'fs';
+-import { BrowserWindow, dialog, app } from 'electron';
++import { randomUUID } from 'crypto';
++import { BrowserWindow, dialog, app, safeStorage } from 'electron';
+ import { atomicWriteFileSync } from '../fs-utils';
+ import { localized } from '../intl';
+ 
+@@ -26,6 +27,17 @@ export default class ConfigPersistenceManager {
+ 
+     this.initializeConfigDirectory();
+     this.load();
++    if (process.env.MAILPORT_PREVIEW === '1' && !this.userWantsToPreserveErrors) {
++      this.cleanMailPortStaging();
++    }
++  }
++
++  private cleanMailPortStaging() {
++    for (const entry of fs.readdirSync(this.configDirPath)) {
++      if (!/^config\.json\.mailport-[\da-f-]{36}\.tmp$/.test(entry)) continue;
++      try { fs.unlinkSync(path.join(this.configDirPath, entry)); }
++      catch { /* An inaccessible staging file is never loaded as configuration. */ }
++    }
+   }
+ 
+   initializeConfigDirectory() {
+@@ -156,6 +168,132 @@ export default class ConfigPersistenceManager {
+     }
+   };
+ 
++  // Preview writes publish only after the entire replacement has reached the filesystem.
++  private writeMailPortSettings = (nextSettings: object) => {
++    if (process.env.MAILPORT_PREVIEW !== '1' || this.userWantsToPreserveErrors) {
++      throw new Error('Preview configuration is unavailable');
++    }
++    const staging = `${this.configFilePath}.mailport-${randomUUID()}.tmp`;
++    try {
++      fs.writeFileSync(staging, JSON.stringify({ '*': nextSettings }, null, 2), {
++        flag: 'wx',
++        mode: 0o600,
++        flush: true,
++      });
++      fs.renameSync(staging, this.configFilePath);
++    } finally {
++      try { fs.unlinkSync(staging); } catch { /* A crash can leave an unreferenced staging file. */ }
++    }
++    this.settings = nextSettings;
++    this.lastSaveTimestamp = Date.now();
++    try { this.syncMailPortDirectory(); }
++    finally { this.emitChangeEvent(); }
++  };
++
++  private syncMailPortDirectory() {
++    // Node cannot open Windows directories for fsync.
++    if (process.platform === 'win32') return;
++    const fd = fs.openSync(this.configDirPath, 'r');
++    try { fs.fsyncSync(fd); }
++    finally { fs.closeSync(fd); }
++  }
++
++  replaceMailPortCredentials = (expected: string, encrypted: object) => {
++    if (JSON.stringify(this.settings['credentials'] ?? null) !== expected) {
++      throw new Error('Credentials changed during this operation');
++    }
++    this.writeMailPortSettings({ ...this.settings, credentials: encrypted });
++  };
++
++  importMailPortAccount = async (json: string) => {
++    if (process.env.MAILPORT_PREVIEW !== '1') throw new Error('Preview is unavailable');
++    const account = JSON.parse(json);
++    const { imap_password: imap, smtp_password: smtp, ...settings } = account.settings;
++    if (account.provider !== 'imap' || typeof imap !== 'string' || typeof smtp !== 'string' ||
++        typeof account.emailAddress !== 'string' || !account.emailAddress ||
++        typeof account.id !== 'string' || !account.id ||
++        settings.imap_allow_insecure_ssl !== false || settings.smtp_allow_insecure_ssl !== false ||
++        settings.refresh_token !== undefined) {
++      throw new Error('Invalid preview account');
++    }
++    account.settings = settings;
++    const email = account.emailAddress;
++    const identity = email.toLowerCase();
++    const incoming = `${email}-imap`;
++    const outgoing = `${email}-smtp`;
++    const blob = this.settings['credentials'];
++    const expected = JSON.stringify(blob ?? null);
++    let keys: Record<string, string> = {};
++    if (blob != null && blob !== 'null') {
++      const ciphertext = Buffer.from(blob);
++      if (process.platform === 'linux' && ciphertext.subarray(0, 3).toString() === 'v10') {
++        throw new Error('Secure storage unavailable');
++      }
++      const decrypted = await safeStorage.decryptStringAsync(ciphertext);
++      const parsed = JSON.parse(decrypted.result);
++      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
++          Object.values(parsed).some(value => typeof value !== 'string')) {
++        throw new Error('Invalid credential store');
++      }
++      keys = parsed;
++    }
++    const suffixes = ['imap', 'smtp', 'refresh-token'];
++    const ownedKeys = Object.keys(keys).filter(key =>
++      suffixes.some(suffix => key.toLowerCase() === `${identity}-${suffix}`));
++    const credentialsMatch = ownedKeys.length === 2 && keys[incoming] === imap && keys[outgoing] === smtp;
++    let encrypted = blob;
++    if (ownedKeys.length && !credentialsMatch) throw new Error('Credentials already exist');
++    if (!credentialsMatch) {
++      if (!(await safeStorage.isAsyncEncryptionAvailable())) throw new Error('Secure storage unavailable');
++      const buffer = await safeStorage.encryptStringAsync(JSON.stringify({
++        ...keys, [incoming]: imap, [outgoing]: smtp,
++      }));
++      if (process.platform === 'linux' && buffer.subarray(0, 3).toString() === 'v10') {
++        throw new Error('Secure storage unavailable');
++      }
++      encrypted = buffer.toJSON();
++    }
++    // Encryption yields to other windows. Read current accounts at commit time and
++    // reject an outdated credential snapshot before replacing the configuration.
++    if (JSON.stringify(this.settings['credentials'] ?? null) !== expected) {
++      throw new Error('Credentials changed during this operation. Try importing again.');
++    }
++    const accounts = this.settings['accounts'] || [];
++    const existing = accounts.filter(item =>
++      item.id === account.id || item.emailAddress.toLowerCase() === identity);
++    if (existing.length) {
++      const [previous] = existing;
++      if (existing.length === 1 && credentialsMatch && previous.id === account.id &&
++          previous.emailAddress === email && previous.provider === account.provider &&
++          previous.name === account.name &&
++          _.isEqual(previous.settings, account.settings)) {
++        const persisted = JSON.parse(fs.readFileSync(this.configFilePath, 'utf8'))['*'];
++        if (JSON.stringify(persisted.credentials ?? null) !== expected ||
++            !persisted.accounts?.some(item => _.isEqual(item, previous))) {
++          throw new Error('Existing account could not be verified');
++        }
++        this.syncMailPortDirectory();
++        return;
++      }
++      throw new Error('Account already exists');
++    }
++    if (credentialsMatch) {
++      const marker = path.join(this.configDirPath, 'mailport-import-pending');
++      const contents = 'MailPort preview import pending\n';
++      const stat = fs.lstatSync(marker, { throwIfNoEntry: false });
++      if (!stat?.isFile() || stat.size !== contents.length ||
++          fs.readFileSync(marker, 'utf8') !== contents) {
++        throw new Error('Credentials already exist');
++      }
++    }
++    this.writeMailPortSettings({
++      ...this.settings,
++      credentials: encrypted,
++      accounts: [...accounts, account],
++      accountsVersion: Number(this.settings['accountsVersion'] || 0) + 1,
++    });
++  };
++
+   getRawValuesString = () => {
+     if (!this.settings || _.isEmpty(this.settings)) {
+       throw new Error('this.settings is empty');
+diff --git a/app/src/config.ts b/app/src/config.ts
+index 3034943..90a589d 100644
+--- a/app/src/config.ts
++++ b/app/src/config.ts
+@@ -743,6 +743,14 @@ export default class Config {
+     }
+   }
+ 
++  async importMailPortAccount(json: string) {
++    await app.configPersistenceManager.importMailPortAccount(json);
++  }
++
++  replaceMailPortCredentials(expected: string, encrypted: Buffer) {
++    app.configPersistenceManager.replaceMailPortCredentials(expected, encrypted.toJSON());
++  }
++
+   setRawValue(keyPath, value) {
+     app.configPersistenceManager.setRawValue(keyPath, value, webContentsId);
+     this.load();
+diff --git a/app/src/key-manager.ts b/app/src/key-manager.ts
+index 3fb1181..06a6ed8 100644
+--- a/app/src/key-manager.ts
++++ b/app/src/key-manager.ts
+@@ -43,6 +43,7 @@ const usesPlaintextFallbackKey = (encrypted: Buffer) =>
+ class KeyManager {
+   private _fatalErrorReported = false;
+   private _reEncryptAttempted = false;
++  private _mailPortCredentialSnapshots = new WeakMap<KeySet, string>();
+ 
+   async deleteAccountSecrets(account: Account) {
+     try {
+@@ -129,13 +130,19 @@ class KeyManager {
+ 
+   async _getKeyHash(): Promise<KeySet> {
+     const encryptedCredentials = AppEnv.config.get(configCredentialsKey);
++    const rememberSnapshot = (keys: KeySet) => {
++      if (process.env.MAILPORT_PREVIEW === '1') {
++        this._mailPortCredentialSnapshots.set(keys, JSON.stringify(encryptedCredentials ?? null));
++      }
++      return keys;
++    };
+     // Check for different null values to prevent issues if a migration from keytar has failed
+     if (
+       encryptedCredentials === undefined ||
+       encryptedCredentials === null ||
+       encryptedCredentials === 'null'
+     ) {
+-      return {} as KeySet;
++      return rememberSnapshot({});
+     }
+ 
+     const encrypted = Buffer.from(encryptedCredentials, 'utf-8');
+@@ -165,9 +172,11 @@ class KeyManager {
+       keys = JSON.parse(decrypted.result) as KeySet;
+     } catch (err) {
+       // Decrypted to something that is not a keyset: no passwords left to preserve.
+-      return {} as KeySet;
++      return rememberSnapshot({});
+     }
+ 
++    rememberSnapshot(keys);
++
+     // Set by Chromium when the provider that encrypts new data is not the one this blob was
+     // written with (e.g. Linux users moving to org.freedesktop.portal.Secret), and by the legacy
+     // path above. The old key still decrypts, so this is hygiene: rewrite once, and never let a
+@@ -206,7 +215,13 @@ class KeyManager {
+     if (usesPlaintextFallbackKey(encryptedCredentials)) {
+       throw unavailable();
+     }
+-    AppEnv.config.set(configCredentialsKey, encryptedCredentials);
++    if (process.env.MAILPORT_PREVIEW === '1') {
++      const expected = this._mailPortCredentialSnapshots.get(keys);
++      AppEnv.config.replaceMailPortCredentials(expected, encryptedCredentials);
++      this._mailPortCredentialSnapshots.set(keys, JSON.stringify(encryptedCredentials));
++    } else {
++      AppEnv.config.set(configCredentialsKey, encryptedCredentials);
++    }
+   }
+ 
+   _reportFatalError(err: Error): never {
 diff --git a/app/internal_packages/onboarding/lib/mailport-adapter.ts b/app/internal_packages/onboarding/lib/mailport-adapter.ts
 new file mode 100644
-index 0000000..0f285de
+index 0000000..262d2a8
 --- /dev/null
 +++ b/app/internal_packages/onboarding/lib/mailport-adapter.ts
-@@ -0,0 +1,42 @@
-+// The preview refuses to overwrite existing Mailspring accounts or claim OAuth is configured.
-+export function createMailPortAdapter({ accounts, makeAccount, save, preflight, verify, journal, idForAccount }) {
-+  const uncertain = new Set<string>();
+@@ -0,0 +1,25 @@
++// The preview maps password accounts into the preview’s atomic configuration write.
++export function createMailPortAdapter({ makeAccount, save, idForAccount }) {
 +  return {
-+    hasUncertainSave: () => uncertain.size > 0,
 +    async upsertAccount(source) {
 +      if (source.incoming.auth.type !== 'password' || source.outgoing.auth.type !== 'password') {
 +        throw new Error('Provider sign-in is not supported by this preview');
@@ -99,134 +343,31 @@ index 0000000..0f285de
 +        imap_allow_insecure_ssl: false, smtp_allow_insecure_ssl: false,
 +      };
 +      const id = idForAccount(source.email, settings);
-+      const identity = source.email.toLowerCase();
-+      if (uncertain.has(identity)) throw new Error('Previous save outcome is unknown');
-+      if (accounts().some(existing =>
-+        existing.id === id || existing.emailAddress.toLowerCase() === source.email.toLowerCase())) {
-+        throw new Error('Account already exists');
-+      }
-+      if (await preflight(source)) throw new Error('Credentials already exist');
 +      const account = makeAccount({
 +        id, emailAddress: source.email, name: source.displayName || source.email,
 +        provider: 'imap', settings,
 +      });
-+      try {
-+        journal.begin();
-+        await save(account);
-+        if (!(await verify(source, id))) throw new Error('Saved account could not be verified');
-+        journal.complete();
-+      } catch (error) {
-+        uncertain.add(identity);
-+        throw error;
-+      }
-+    },
-+  };
-+}
-diff --git a/app/internal_packages/onboarding/lib/mailport-verify.ts b/app/internal_packages/onboarding/lib/mailport-verify.ts
-new file mode 100644
-index 0000000..560c162
---- /dev/null
-+++ b/app/internal_packages/onboarding/lib/mailport-verify.ts
-@@ -0,0 +1,33 @@
-+// Reject orphaned credentials as well as accounts; do not overwrite unknown secrets.
-+export async function hasMailPortCredentialCollision(source, readConfig, decrypt) {
-+  const config = JSON.parse(await readConfig())['*'];
-+  if (!config || typeof config !== 'object') throw new Error('Invalid profile');
-+  if (config.credentials == null) return false;
-+  if (!Array.isArray(config.credentials.data)) throw new Error('Invalid credential store');
-+  const decrypted = await decrypt(Buffer.from(config.credentials.data));
-+  const secrets = JSON.parse(decrypted.result);
-+  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) throw new Error('Invalid credential store');
-+  const email = source.email.toLowerCase();
-+  return Object.keys(secrets).some(key => ['imap', 'smtp', 'refresh-token'].some(
-+    suffix => key.toLowerCase() === `${email}-${suffix}`));
-+}
-+
-+// Verify the persisted snapshot; this does not establish crash-safe durability.
-+export async function verifyMailPortAccount(source, id, readConfig, decrypt) {
-+  const config = JSON.parse(await readConfig())['*'];
-+  const account = (config.accounts || []).find((item) => item.id === id && item.emailAddress === source.email);
-+  if (!account || !config.credentials?.data) return false;
-+  const settings = account.settings || {};
-+  if (settings.imap_host !== source.incoming.host || settings.imap_port !== source.incoming.port ||
-+      settings.imap_username !== source.incoming.username ||
-+      settings.imap_security !== (source.incoming.security === 'tls' ? 'SSL / TLS' : 'STARTTLS') ||
-+      settings.imap_allow_insecure_ssl !== false ||
-+      settings.smtp_host !== source.outgoing.host || settings.smtp_port !== source.outgoing.port ||
-+      settings.smtp_username !== source.outgoing.username ||
-+      settings.smtp_security !== (source.outgoing.security === 'tls' ? 'SSL / TLS' : 'STARTTLS') ||
-+      settings.smtp_allow_insecure_ssl !== false) return false;
-+  const decrypted = await decrypt(Buffer.from(config.credentials.data));
-+  const secrets = JSON.parse(decrypted.result);
-+  return secrets[`${source.email}-imap`] === source.incoming.auth.password &&
-+    secrets[`${source.email}-smtp`] === source.outgoing.auth.password;
-+}
-diff --git a/app/internal_packages/onboarding/lib/mailport-journal.ts b/app/internal_packages/onboarding/lib/mailport-journal.ts
-new file mode 100644
-index 0000000..d99e21d
---- /dev/null
-+++ b/app/internal_packages/onboarding/lib/mailport-journal.ts
-@@ -0,0 +1,40 @@
-+import fs from 'fs';
-+import path from 'path';
-+
-+// Preview only. The marker holds no account data and blocks further imports
-+// until a human has inspected an interrupted or ambiguous write.
-+export function createMailPortJournal(profile: string) {
-+  const marker = path.join(profile, 'mailport-import-pending');
-+  const syncDirectory = () => {
-+    const fd = fs.openSync(profile, 'r');
-+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-+  };
-+  return {
-+    isPending() {
-+      try { fs.lstatSync(marker); return true; }
-+      catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-+    },
-+    begin() {
-+      const fd = fs.openSync(marker, 'wx', 0o600);
-+      try { fs.writeFileSync(fd, 'MailPort preview import pending\n'); fs.fsyncSync(fd); }
-+      finally { fs.closeSync(fd); }
-+      syncDirectory();
-+    },
-+    complete() {
-+      fs.unlinkSync(marker);
-+      try {
-+        syncDirectory();
-+      } catch (error) {
-+        // Removal could not be made durable. Restore the guard if possible;
-+        // never report a verified completion on this path.
-+        try {
-+          const fd = fs.openSync(marker, 'wx', 0o600);
-+          try { fs.writeFileSync(fd, 'MailPort preview import pending\n'); fs.fsyncSync(fd); }
-+          finally { fs.closeSync(fd); }
-+          syncDirectory();
-+        } catch { /* Keep the original error and leave recovery uncertain. */ }
-+        throw error;
-+      }
++      await save(account);
 +    },
 +  };
 +}
 diff --git a/app/internal_packages/onboarding/lib/page-mailport-import.tsx b/app/internal_packages/onboarding/lib/page-mailport-import.tsx
 new file mode 100644
-index 0000000..ff2a139
+index 0000000..0fe258f
 --- /dev/null
 +++ b/app/internal_packages/onboarding/lib/page-mailport-import.tsx
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,147 @@
 +import React from 'react';
 +import fs from 'fs';
 +import { ipcRenderer } from 'electron';
 +import { Account, AccountStore } from 'mailspring-exports';
 +import { idForAccount } from './onboarding-helpers';
 +import { createMailPortAdapter } from './mailport-adapter';
-+import { hasMailPortCredentialCollision, verifyMailPortAccount } from './mailport-verify';
-+import { createMailPortJournal } from './mailport-journal';
 +import * as OnboardingActions from './onboarding-actions';
 +
 +// Local proof of concept: bundled from MailPort's reference SDK, not an upstream dependency.
 +const { ImportRequestSession, transferPackageCode } = require('./mailport-sdk.cjs');
-+const { app, dialog, getCurrentWindow, safeStorage } = require('@electron/remote');
-+const path = require('path');
++const { app, dialog, getCurrentWindow } = require('@electron/remote');
 +
 +type State = {
 +  requestCode: string;
@@ -234,44 +375,20 @@ index 0000000..ff2a139
 +  message: string;
 +  busy: boolean;
 +  completed: boolean;
-+  blocked: boolean;
 +};
 +
 +export default class MailPortImportPage extends React.Component<Record<string, never>, State> {
-+  state: State = { requestCode: '', transferCode: '', message: '', busy: false, completed: false, blocked: false };
++  state: State = { requestCode: '', transferCode: '', message: '', busy: false, completed: false };
 +  private session: any;
 +  private serialized: string | null = null;
 +  private alive = true;
 +  private wasFirstAccount = false;
 +  private abort = new AbortController();
-+  private journal = createMailPortJournal(app.getPath('userData'));
 +  private adapter = createMailPortAdapter({
-+    accounts: () => AccountStore.accounts(),
 +    makeAccount: (data) => new Account(data),
-+    save: (account) => AccountStore.addAccount(account),
-+    preflight: (source) => hasMailPortCredentialCollision(source,
-+      () => fs.promises.readFile(path.join(app.getPath('userData'), 'config.json'), 'utf8'),
-+      (encrypted) => safeStorage.decryptStringAsync(encrypted)),
-+    verify: (source, id) => verifyMailPortAccount(source, id,
-+      () => fs.promises.readFile(path.join(app.getPath('userData'), 'config.json'), 'utf8'),
-+      (encrypted) => safeStorage.decryptStringAsync(encrypted)),
-+    journal: this.journal,
++    save: (account: Account) => AppEnv.config.importMailPortAccount(JSON.stringify(account.toJSON())),
 +    idForAccount,
 +  });
-+
-+  componentDidMount() {
-+    this.checkPending();
-+  }
-+
-+  private checkPending() {
-+    try {
-+      if (!this.journal.isPending()) return false;
-+    } catch {
-+      // An unreadable marker is treated as an uncertain prior import.
-+    }
-+    this.update({ blocked: true, message: 'A previous import may be incomplete. Further imports are blocked; inspect the isolated test profile before starting a new request.' });
-+    return true;
-+  }
 +
 +  componentWillUnmount() {
 +    this.alive = false;
@@ -285,7 +402,6 @@ index 0000000..ff2a139
 +  }
 +
 +  private start = async () => {
-+    if (this.checkPending()) return;
 +    this.update({ busy: true, message: '' });
 +    let session: any;
 +    try {
@@ -356,10 +472,7 @@ index 0000000..ff2a139
 +      });
 +      const saved = result.results.filter((item: any) => item.status === 'configured').length;
 +      const failed = result.results.length - saved;
-+      const recovery = this.adapter.hasUncertainSave()
-+        ? ' A save may be incomplete. Stop importing and inspect the isolated test profile before starting a new request.'
-+        : '';
-+      this.update({ completed: result.completed, message: `${saved} account(s) verified in the local profile. ${failed ? `${failed} could not be imported (existing account or credentials, provider sign-in, or storage failure). ` : ''}Imported settings have not been verified against the mail server.${recovery}` });
++      this.update({ completed: result.completed, message: `${saved} account(s) saved in the local profile. ${failed ? `${failed} could not be imported. Check for existing accounts or credentials, or retry after resolving the storage problem. ` : ''}Mail server connections have not been verified.` });
 +      if (result.completed) this.serialized = null;
 +    } catch {
 +      this.update({ message: 'The transfer could not be imported. Check the code and request expiry.' });
@@ -375,12 +488,12 @@ index 0000000..ff2a139
 +  };
 +
 +  render() {
-+    const { requestCode, transferCode, message, busy, completed, blocked } = this.state;
++    const { requestCode, transferCode, message, busy, completed } = this.state;
 +    return (
 +      <div className="page account-setup">
 +        <h2>Import from MailPort</h2>
 +        <p>Preview: use synthetic accounts only. Password accounts are supported; provider sign-in must be set up separately.</p>
-+        {!requestCode && <button type="button" disabled={busy || blocked} onClick={this.start}>Create import request</button>}
++        {!requestCode && <button type="button" disabled={busy} onClick={this.start}>Create import request</button>}
 +        {!!requestCode && <p>Request code: <strong>{requestCode}</strong></p>}
 +        {!!requestCode && !completed && <button type="button" disabled={busy} onClick={this.choosePackage}>Open .mailport file</button>}
 +        {!!transferCode && !completed && <p>Transfer code: <strong>{transferCode}</strong></p>}
@@ -393,40 +506,28 @@ index 0000000..ff2a139
 +}
 diff --git a/app/internal_packages/onboarding/specs/mailport-adapter.test.ts b/app/internal_packages/onboarding/specs/mailport-adapter.test.ts
 new file mode 100644
-index 0000000..c01cd4f
+index 0000000..95511e4
 --- /dev/null
 +++ b/app/internal_packages/onboarding/specs/mailport-adapter.test.ts
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,42 @@
 +import assert from 'node:assert/strict';
 +import test from 'node:test';
 +import { createMailPortAdapter } from '../lib/mailport-adapter';
-+import { hasMailPortCredentialCollision, verifyMailPortAccount } from '../lib/mailport-verify';
-+import { createMailPortJournal } from '../lib/mailport-journal';
-+import fs from 'node:fs';
-+import os from 'node:os';
-+import path from 'node:path';
-+
-+const journal = () => ({ begin() {}, complete() {} });
 +
 +const sample = () => ({
-+  email: 'sample@example.com', displayName: 'Sample',
++  email: 'sample@example.com',
++  displayName: 'Sample',
 +  incoming: { host: 'imap.example.com', port: 993, username: 'in', security: 'tls', auth: { type: 'password', password: 'synthetic-in' } },
 +  outgoing: { host: 'smtp.example.com', port: 587, username: 'out', security: 'starttls', auth: { type: 'password', password: 'synthetic-out' } },
 +});
-+function fixture(existing = []) {
++
++test('maps both credentials and secure server settings to the save operation', async () => {
 +  const saved = [];
-+  return { saved, adapter: createMailPortAdapter({
-+    accounts: () => existing,
-+    makeAccount: (data) => data,
-+    save: async (account) => { saved.push(account); },
-+    verify: async () => true,
-+    preflight: async () => false,
-+    journal: journal(),
++  const adapter = createMailPortAdapter({
++    makeAccount: data => data,
++    save: async account => { saved.push(account); },
 +    idForAccount: () => 'stable-id',
-+  }) };
-+}
-+test('maps independent credentials and secure server settings', async () => {
-+  const { saved, adapter } = fixture();
++  });
 +  await adapter.upsertAccount(sample());
 +  assert.equal(saved.length, 1);
 +  assert.equal(saved[0].settings.imap_password, 'synthetic-in');
@@ -434,104 +535,20 @@ index 0000000..c01cd4f
 +  assert.equal(saved[0].settings.imap_security, 'SSL / TLS');
 +  assert.equal(saved[0].settings.smtp_security, 'STARTTLS');
 +  assert.equal(saved[0].settings.imap_allow_insecure_ssl, false);
++  assert.equal(saved[0].settings.smtp_allow_insecure_ssl, false);
 +});
-+test('refuses existing accounts and OAuth without saving', async () => {
-+  const duplicate = fixture([{ id: 'other', emailAddress: 'SAMPLE@example.com' }]);
-+  await assert.rejects(duplicate.adapter.upsertAccount(sample()));
-+  assert.equal(duplicate.saved.length, 0);
-+  const oauth = fixture();
-+  const account = sample();
-+  account.incoming.auth = { type: 'oauth', password: '' };
-+  await assert.rejects(oauth.adapter.upsertAccount(account));
-+  assert.equal(oauth.saved.length, 0);
-+});
-+test('propagates storage failure', async () => {
-+  let saves = 0;
-+  const adapter = createMailPortAdapter({ accounts: () => [], makeAccount: x => x,
-+    save: async () => { saves++; throw new Error('storage unavailable'); }, preflight: async () => false, verify: async () => true, journal: journal(), idForAccount: () => 'id' });
-+  await assert.rejects(adapter.upsertAccount(sample()));
-+  assert.equal(adapter.hasUncertainSave(), true);
-+  await assert.rejects(adapter.upsertAccount(sample()));
-+  assert.equal(saves, 1);
-+});
-+test('treats an unverified save as uncertain and does not retry it', async () => {
-+  let saves = 0;
-+  const adapter = createMailPortAdapter({ accounts: () => [], makeAccount: x => x,
-+    save: async () => { saves++; }, preflight: async () => false, verify: async () => false, journal: journal(), idForAccount: () => 'id' });
-+  await assert.rejects(adapter.upsertAccount(sample()));
-+  assert.equal(adapter.hasUncertainSave(), true);
-+  await assert.rejects(adapter.upsertAccount(sample()));
-+  assert.equal(saves, 1);
-+});
-+test('a pending marker blocks a later adapter and stores no account details', async () => {
-+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mailport-journal-test-'));
-+  try {
-+    let saves = 0;
-+    const build = () => createMailPortAdapter({ accounts: () => [], makeAccount: x => x,
-+      save: async () => { saves++; throw new Error('ambiguous'); }, preflight: async () => false, verify: async () => true,
-+      journal: createMailPortJournal(dir), idForAccount: () => 'id' });
-+    await assert.rejects(build().upsertAccount(sample()));
-+    await assert.rejects(build().upsertAccount(sample()));
-+    assert.equal(saves, 1);
-+    assert.equal(fs.readFileSync(path.join(dir, 'mailport-import-pending'), 'utf8'), 'MailPort preview import pending\n');
-+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-+});
-+test('a verified save clears its pending marker', async () => {
-+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mailport-journal-test-'));
-+  try {
-+    const adapter = createMailPortAdapter({ accounts: () => [], makeAccount: x => x,
-+      save: async () => {}, preflight: async () => false, verify: async () => true, journal: createMailPortJournal(dir), idForAccount: () => 'id' });
-+    await adapter.upsertAccount(sample());
-+    assert.equal(fs.existsSync(path.join(dir, 'mailport-import-pending')), false);
-+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-+});
-+test('restores the pending marker if syncing its removal fails', () => {
-+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mailport-journal-test-'));
-+  const original = fs.fsyncSync;
-+  try {
-+    const marker = createMailPortJournal(dir);
-+    marker.begin();
-+    let inject = true;
-+    fs.fsyncSync = fd => {
-+      if (inject && fs.fstatSync(fd).isDirectory()) { inject = false; throw new Error('synthetic sync failure'); }
-+      return original(fd);
-+    };
-+    assert.throws(() => marker.complete());
-+    assert.equal(marker.isPending(), true);
-+  } finally {
-+    fs.fsyncSync = original;
-+    fs.rmSync(dir, { recursive: true, force: true });
-+  }
-+});
-+test('refuses orphaned credentials without saving or making a marker', async () => {
-+  let saved = false;
-+  let marked = false;
-+  const adapter = createMailPortAdapter({ accounts: () => [], makeAccount: x => x,
-+    save: async () => { saved = true; }, preflight: async () => true, verify: async () => true,
-+    journal: { begin() { marked = true; }, complete() {} }, idForAccount: () => 'id' });
-+  await assert.rejects(adapter.upsertAccount(sample()));
-+  assert.equal(saved, false);
-+  assert.equal(marked, false);
-+  const read = async () => JSON.stringify({ '*': { credentials: { data: [1] } } });
-+  assert.equal(await hasMailPortCredentialCollision(sample(), read,
-+    async () => ({ result: JSON.stringify({ 'SAMPLE@example.com-imap': 'synthetic' }) })), true);
-+  assert.equal(await hasMailPortCredentialCollision(sample(), async () => JSON.stringify({ '*': {} }), async () => { throw new Error('unexpected'); }), false);
-+  await assert.rejects(hasMailPortCredentialCollision(sample(), read, async () => { throw new Error('unreadable'); }));
-+});
-+test('verifies the saved settings and both credentials, and rejects incomplete snapshots', async () => {
-+  const source = sample();
-+  const config = { '*': { accounts: [{ id: 'id', emailAddress: source.email, settings: {
-+    imap_host: 'imap.example.com', imap_port: 993, imap_username: 'in', imap_security: 'SSL / TLS', imap_allow_insecure_ssl: false,
-+    smtp_host: 'smtp.example.com', smtp_port: 587, smtp_username: 'out', smtp_security: 'STARTTLS', smtp_allow_insecure_ssl: false,
-+  } }], credentials: { data: [1] } } };
-+  const keys = { 'sample@example.com-imap': 'synthetic-in', 'sample@example.com-smtp': 'synthetic-out' };
-+  const read = async () => JSON.stringify(config);
-+  const decrypt = async () => ({ result: JSON.stringify(keys) });
-+  assert.equal(await verifyMailPortAccount(source, 'id', read, decrypt), true);
-+  keys['sample@example.com-smtp'] = 'wrong';
-+  assert.equal(await verifyMailPortAccount(source, 'id', read, decrypt), false);
-+  keys['sample@example.com-smtp'] = 'synthetic-out';
-+  config['*'].accounts[0].settings.imap_allow_insecure_ssl = true;
-+  assert.equal(await verifyMailPortAccount(source, 'id', read, decrypt), false);
-+  await assert.rejects(verifyMailPortAccount(source, 'id', async () => { throw new Error('unreadable'); }, decrypt));
++
++test('refuses OAuth and propagates an acknowledged save failure', async () => {
++  let attempts = 0;
++  const adapter = createMailPortAdapter({
++    makeAccount: data => data,
++    save: async () => { attempts += 1; throw new Error('Synthetic write failed'); },
++    idForAccount: () => 'stable-id',
++  });
++  const oauth = sample();
++  oauth.incoming.auth.type = 'oauth';
++  await assert.rejects(adapter.upsertAccount(oauth), /Provider sign-in/);
++  assert.equal(attempts, 0);
++  await assert.rejects(adapter.upsertAccount(sample()), /Synthetic write failed/);
++  assert.equal(attempts, 1);
 +});

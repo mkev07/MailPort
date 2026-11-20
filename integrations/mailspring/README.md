@@ -32,47 +32,41 @@ failed under npm 11. Run the preview with a dedicated configuration directory:
 env -u ELECTRON_RUN_AS_NODE MAILPORT_PREVIEW=1 npm start -- --config-dir-path /tmp/mailport-mailspring-e2e
 ```
 
-This starts a separate profile. It can write to that directory and the system
-credential store; use only the built-in sample accounts. It does not verify
-connections to mail servers before saving an imported account. It rejects OAuth
-and existing accounts. Before saving, the preview creates a profile-wide
-pending marker that contains no account details. An interrupted or unverified
-save leaves the marker in place and blocks subsequent imports, including after
-restart. The preview has no automatic recovery: inspect the isolated profile
-before removing the marker or starting another request.
-It also refuses to overwrite existing IMAP, SMTP, or refresh-token credential
-entries for the address, even if the corresponding account record is missing.
-This check is not a transaction with other Mailspring operations.
-Mailspring's save operation can return without confirming a successful disk
-write. The preview checks the account settings and decrypted credentials in the
-on-disk profile after saving; a mismatch or read failure is treated as an
-uncertain save. This snapshot check is not a crash-safe transaction, and the
-marker prevents an automatic retry but does not repair partial writes or prove
-that Mailspring's own data survived a power failure. Recovery and cross-platform
-validation remain release blockers for the integration.
-Review the [validation notes](../../docs/validation/mailspring-preview.md) for
-what was tested and the remaining work.
+This starts a separate profile for synthetic password accounts. The preview
+checks both transfer codes and saves each account record with its encrypted IMAP
+and SMTP credentials in one configuration replacement. It does not test mail
+server connectivity. OAuth accounts and conflicting accounts or credentials
+are refused.
+
+If a save fails while the request is still open, retry the same package after
+resolving the storage error. After Mailspring restarts, create a new request and
+export the same account selection again. An account counts as already saved
+only when its record and both credentials match. The import leaves that account
+intact and continues with the remaining accounts.
+
+For profiles interrupted by an older preview, a new, approved transfer can
+rebuild a missing account using the existing encrypted entries if both passwords
+match exactly and the old pending marker is present. Other entries are preserved.
+The old marker can stay in place. The current importer does not use it to block
+the profile. See the [validation notes](../../docs/validation/mailspring-preview.md)
+for the observed behavior and limits.
 
 ## Synthetic UI checks
 
-Close other Mailspring instances first. Build the Rust compatibility example
-with `cargo build -p mailport-core --example compatibility`, then run from
-the MailPort root with the prepared checkout's dependencies installed:
+Close any other development preview running from the same Mailspring checkout.
+Build the Rust sender with `cargo build -p mailport-core --example compatibility`.
+Then run these checks from the MailPort root with the prepared Mailspring
+checkout's dependencies installed:
 
 ```sh
-node integrations/mailspring/check-import-ui.cjs /path/to/Mailspring
-node integrations/mailspring/check-import-ui.cjs /path/to/Mailspring --fail-write
-node integrations/mailspring/check-import-ui.cjs /path/to/Mailspring --fail-account
-node integrations/mailspring/check-import-ui.cjs /path/to/Mailspring --orphan
+for case in success write-error crash-before crash-after legacy-orphan credential-conflict credential-race; do
+  node integrations/mailspring/check-import-ui.cjs /path/to/Mailspring "$case" || exit
+done
 ```
 
-Each run creates and removes its own temporary profile. The failure cases inject
-write errors at the credential and account-record steps respectively and check
-that a new import is blocked after restarting. They never use a real mailbox or
-change a normal profile.
-The orphan check deliberately removes the marker only in its controlled
-temporary profile, then verifies that pre-existing synthetic credentials are
-preserved and the import is refused.
+Each check uses its own temporary profile. The crash cases kill only their own
+Electron process just before or just after replacing the configuration file.
+They relaunch Mailspring and complete the import using a fresh transfer.
 
 ## Credential read-back from the isolated test profile
 
