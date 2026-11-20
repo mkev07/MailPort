@@ -32,6 +32,11 @@ independently installed dependencies using Node.js 22.22.3 and npm 10.9.8.
 The upstream prebuilt Mailsync binary requires `mailspring` in its executable
 path. A checkout without that name stopped during startup with exit code 2.
 
+The mixed-transfer check verifies that the preview saves the password account
+and displays the OAuth address under **Sign in separately**. The preview uses
+that list for the current import screen. Provider sign-in happens through
+Mailspring's regular account setup.
+
 All seven cases also passed on Debian 13 ARM64 in Docker with Xvfb, a D-Bus
 session, and an unlocked GNOME Keyring. The clean install compiled SQLite with
 Clang 19 for Electron 44.11.4 and used upstream's prebuilt Mailsync. Debian 12

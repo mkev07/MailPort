@@ -10,7 +10,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 
 const root = fs.realpathSync(process.argv[2]);
 const mode = process.argv[3] || 'success';
-assert.ok(['success', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race'].includes(mode));
+assert.ok(['success', 'provider-sign-in', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race'].includes(mode));
 const mailspring = createRequire(path.join(root, 'package.json'));
 const { _electron } = mailspring('playwright');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mailport-ui-test-'));
@@ -26,6 +26,10 @@ const sample = {
   outgoing: { ...vector.outgoing, auth: { type: 'password', password: 'PUBLIC-SYNTHETIC-SMTP' } },
 };
 const another = { ...sample, id: '00000000-0000-4000-8000-000000000002', email: 'second-ui@example.com' };
+const oauth = {
+  ...another, email: 'google-preview@example.com',
+  incoming: { ...another.incoming, auth: { type: 'oauth', providerId: 'google' } },
+};
 if (localMail) {
   assert.equal(mode, 'success');
   for (const [index, account] of [sample, another].entries()) {
@@ -266,7 +270,8 @@ async function main() {
   }
 
   const page = await importPage();
-  await prepare(page, mode === 'success' ? [sample, another] : [sample]);
+  const selected = mode === 'provider-sign-in' ? [oauth, sample] : mode === 'success' ? [sample, another] : [sample];
+  await prepare(page, selected);
   const before = fs.readFileSync(configPath, 'utf8');
   const credentials = config().credentials;
 
@@ -327,6 +332,17 @@ async function main() {
       const expected = mode === 'success' ? [sample, another] : [sample];
       await page.getByText(`${expected.length} account(s) saved in the local profile.`, { exact: false }).waitFor();
       await assertSaved(expected);
+      if (mode === 'provider-sign-in') {
+        const signIns = page.getByRole('region', { name: 'Sign in separately' });
+        await signIns.getByText(oauth.email).waitFor();
+        assert.ok(!(await page.getByRole('status').innerText()).includes('could not be imported'));
+        const hasDeferredCredentials = await app.evaluate(async ({ safeStorage }, email) => {
+          const credentials = global.application.configPersistenceManager.settings.credentials;
+          const decoded = await safeStorage.decryptStringAsync(Buffer.from(credentials.data));
+          return Object.keys(JSON.parse(decoded.result)).some(key => key.startsWith(`${email}-`));
+        }, oauth.email);
+        assert.equal(hasDeferredCredentials, false);
+      }
       if (mode === 'legacy-orphan') assert.deepEqual(config().credentials, credentials);
       if (mode === 'credential-race') {
         const preserved = await app.evaluate(async ({ safeStorage }) => {

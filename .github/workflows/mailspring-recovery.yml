@@ -64,7 +64,7 @@ jobs:
         shell: pwsh
         run: |
           $checkout = Join-Path $env:RUNNER_TEMP 'mailspring-preview'
-          foreach ($scenario in @('success', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race')) {
+          foreach ($scenario in @('success', 'provider-sign-in', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race')) {
             node integrations/mailspring/check-import-ui.cjs $checkout $scenario
             if ($LASTEXITCODE -ne 0) { throw "Mailspring recovery failed: $scenario" }
           }

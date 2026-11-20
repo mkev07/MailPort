@@ -452,10 +452,10 @@ index 0000000..262d2a8
 +}
 diff --git a/app/internal_packages/onboarding/lib/page-mailport-import.tsx b/app/internal_packages/onboarding/lib/page-mailport-import.tsx
 new file mode 100644
-index 0000000..0fe258f
+index 0000000..02a998f
 --- /dev/null
 +++ b/app/internal_packages/onboarding/lib/page-mailport-import.tsx
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,170 @@
 +import React from 'react';
 +import fs from 'fs';
 +import { ipcRenderer } from 'electron';
@@ -474,15 +474,17 @@ index 0000000..0fe258f
 +  message: string;
 +  busy: boolean;
 +  completed: boolean;
++  signIns: string[];
 +};
 +
 +export default class MailPortImportPage extends React.Component<Record<string, never>, State> {
-+  state: State = { requestCode: '', transferCode: '', message: '', busy: false, completed: false };
++  state: State = { requestCode: '', transferCode: '', message: '', busy: false, completed: false, signIns: [] };
 +  private session: any;
 +  private serialized: string | null = null;
 +  private alive = true;
 +  private wasFirstAccount = false;
 +  private abort = new AbortController();
++  private pendingSignIns = new Map<string, string>();
 +  private adapter = createMailPortAdapter({
 +    makeAccount: (data) => new Account(data),
 +    save: (account: Account) => AppEnv.config.importMailPortAccount(JSON.stringify(account.toJSON())),
@@ -513,6 +515,7 @@ index 0000000..0fe258f
 +      session = await ImportRequestSession.create('Mailspring');
 +      await fs.promises.writeFile(result.filePath, session.requestFile, { flag: 'wx', mode: 0o600 });
 +      if (!this.alive) { session.close(); return; }
++      this.pendingSignIns.clear();
 +      this.session = session;
 +      this.wasFirstAccount = AccountStore.accounts().length === 0;
 +      this.update({ requestCode: session.verificationCode, message: 'Open this request in MailPort and compare the request code. This request expires in 15 minutes.' });
@@ -567,11 +570,22 @@ index 0000000..0fe258f
 +        serialized: this.serialized,
 +        verifiedCode: this.state.transferCode,
 +        signal: this.abort.signal,
-+        adapter: this.adapter,
++        adapter: {
++          upsertAccount: async (account) => {
++            if (account.incoming.auth.type === 'oauth' || account.outgoing.auth.type === 'oauth') {
++              this.pendingSignIns.set(account.id, account.email);
++              return;
++            }
++            await this.adapter.upsertAccount(account);
++          },
++        },
 +      });
 +      const saved = result.results.filter((item: any) => item.status === 'configured').length;
-+      const failed = result.results.length - saved;
-+      this.update({ completed: result.completed, message: `${saved} account(s) saved in the local profile. ${failed ? `${failed} could not be imported. Check for existing accounts or credentials, or retry after resolving the storage problem. ` : ''}Mail server connections have not been verified.` });
++      const signIns = result.results
++        .filter((item: any) => item.status === 'needs-sign-in')
++        .map((item: any) => this.pendingSignIns.get(item.accountId)!);
++      const failed = result.results.length - saved - signIns.length;
++      this.update({ completed: result.completed, signIns, message: `${saved} account(s) saved in the local profile. ${failed ? `${failed} could not be imported. Check for existing accounts or credentials, or retry after resolving the storage problem. ` : ''}Mail server connections have not been verified.` });
 +      if (result.completed) this.serialized = null;
 +    } catch {
 +      this.update({ message: 'The transfer could not be imported. Check the code and request expiry.' });
@@ -582,12 +596,14 @@ index 0000000..0fe258f
 +  };
 +
 +  private finish = () => {
-+    if (this.wasFirstAccount) OnboardingActions.moveToPage('initial-preferences');
++    if (this.wasFirstAccount) OnboardingActions.moveToPage(
++      AccountStore.accounts().length ? 'initial-preferences' : 'account-choose'
++    );
 +    else ipcRenderer.send('account-setup-successful');
 +  };
 +
 +  render() {
-+    const { requestCode, transferCode, message, busy, completed } = this.state;
++    const { requestCode, transferCode, message, busy, completed, signIns } = this.state;
 +    return (
 +      <div className="page account-setup">
 +        <h2>Import from MailPort</h2>
@@ -598,6 +614,13 @@ index 0000000..0fe258f
 +        {!!transferCode && !completed && <p>Transfer code: <strong>{transferCode}</strong></p>}
 +        {!!transferCode && !completed && <button type="button" disabled={busy} onClick={this.importAccounts}>Codes match · Import accounts</button>}
 +        {message && <p role="status">{message}</p>}
++        {signIns.length > 0 && (
++          <section aria-label="Sign in separately">
++            <h3>Sign in separately</h3>
++            <p>Use Mailspring’s Add Account to sign in to these accounts with their providers.</p>
++            <ul>{signIns.map((email, index) => <li key={index}>{email}</li>)}</ul>
++          </section>
++        )}
 +        {completed && <button type="button" onClick={this.finish}>Done</button>}
 +      </div>
 +    );

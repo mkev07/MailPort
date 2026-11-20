@@ -91,6 +91,10 @@ lookup, which is available on both versions.
   A wrong confirmation code left the login store untouched. Two synthetic
   accounts saved after the correct code, and all four credentials were read
   back after a restart.
+- In a mixed transfer, the add-on displayed the OAuth account under
+  **Sign in separately** and imported the password accounts. The OAuth
+  address was listed for the current tab, with no Thunderbird account or
+  credential entry created for it.
 
 ## Send and receive with controlled servers
 

@@ -46,8 +46,10 @@ env -u ELECTRON_RUN_AS_NODE npm start -- --mailport-preview --config-dir-path /t
 This starts a separate profile for synthetic password accounts. The preview
 checks both transfer codes and saves each account record with its encrypted IMAP
 and SMTP credentials in one configuration replacement. It does not test mail
-server connectivity. OAuth accounts and conflicting accounts or credentials
-are refused.
+server connectivity. Accounts that require OAuth appear under
+**Sign in separately** for the current import screen. Add those accounts
+through Mailspring's provider setup. The preview refuses conflicting accounts
+and credentials.
 
 If a save fails while the request is still open, retry the same package after
 resolving the storage error. After Mailspring restarts, create a new request and

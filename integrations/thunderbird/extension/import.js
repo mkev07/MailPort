@@ -9,6 +9,9 @@ const fileInput = byId("transfer-file");
 const approval = byId("approval");
 const verifiedInput = byId("verified-code");
 const status = byId("status");
+const providerSection = byId("provider-sign-in");
+const providerList = byId("provider-accounts");
+const pendingSignIns = new Map();
 const maxPackageBytes = 4 * 1024 * 1024;
 
 let session;
@@ -45,6 +48,9 @@ create.addEventListener("click", async () => {
   setBusy(true);
   try {
     clearRequest();
+    pendingSignIns.clear();
+    providerList.replaceChildren();
+    providerSection.hidden = true;
     session = await ImportRequestSession.create("Thunderbird");
     const request = new Blob([session.requestFile], { type: "application/octet-stream" });
     requestUrl = URL.createObjectURL(request);
@@ -102,13 +108,30 @@ approval.addEventListener("submit", async event => {
     const result = await session.importPackage({
       serialized: selection.serialized,
       verifiedCode,
-      adapter: { upsertAccount: account => browser.mailPortPreview.saveSyntheticAccount(account) },
+      adapter: {
+        async upsertAccount(account) {
+          if (account.incoming.auth.type === "oauth" || account.outgoing.auth.type === "oauth") {
+            pendingSignIns.set(account.id, account.email);
+            return;
+          }
+          await browser.mailPortPreview.saveSyntheticAccount(account);
+        },
+      },
     });
     const saved = result.results.filter(account => account.status === "configured").length;
-    const total = result.results.length;
-    status.textContent = saved === total
-      ? `Saved ${saved} of ${total} accounts in Thunderbird.`
-      : `Saved ${saved} of ${total} accounts. You can retry this transfer.`;
+    const deferred = result.results.filter(account => account.status === "needs-sign-in");
+    const passwordTotal = result.results.length - deferred.length;
+    providerList.replaceChildren(...deferred.map(({ accountId }) => {
+      const item = document.createElement("li");
+      item.textContent = pendingSignIns.get(accountId);
+      return item;
+    }));
+    providerSection.hidden = deferred.length === 0;
+    status.textContent = [
+      passwordTotal && `Saved ${saved} of ${passwordTotal} accounts in Thunderbird.`,
+      deferred.length && `${deferred.length} account(s) need separate sign-in.`,
+      !result.completed && "You can retry this transfer.",
+    ].filter(Boolean).join(" ");
     if (result.completed) clearRequest();
   } catch (error) {
     if (error.code === "TRANSFER_EXPIRED") {

@@ -400,6 +400,10 @@ async function checkLocalMail() {
 
 async function checkAddon(version) {
   const id = "mailport-preview@mailport.invalid";
+  const oauth = syntheticAccount(3);
+  oauth.email = "google-preview@example.com";
+  oauth.incoming.auth = { type: "oauth", providerId: "google" };
+  const selected = localMail ? accounts : [...accounts, oauth];
   const { value: installed } = await instance.command("Addon:Install", {
     path: resolve(addon), temporary: true,
   });
@@ -472,7 +476,7 @@ async function checkAddon(version) {
     if (saved.endsWith("}")) return saved;
   }, "the downloaded request file");
   const sealed = JSON.parse(execFileSync(sender, ["seal-transfer"], {
-    input: JSON.stringify({ requestFile, accounts, ids: accounts.map(account => account.id) }),
+    input: JSON.stringify({ requestFile, accounts: selected, ids: selected.map(account => account.id) }),
     encoding: "utf8", timeout: 30000, stdio: ["pipe", "pipe", "ignore"],
   }));
   assert.equal(requestCode, sealed.verificationCode);
@@ -500,6 +504,11 @@ async function checkAddon(version) {
 
   await enterCode(sealed.packageCode);
   await statusIncludes("Saved 2 of 2 accounts in Thunderbird");
+  if (!localMail) {
+    await statusIncludes("need separate sign-in");
+    assert.equal(await runPage("return document.querySelector('#provider-accounts').textContent;"), oauth.email);
+    assert.ok(!(await readFile(join(profile, "prefs.js"), "utf8")).includes(oauth.email));
+  }
   await assertEncrypted(4);
   await instance.command("Marionette:SetContext", { value: "chrome" });
   await stop();
