@@ -23,9 +23,9 @@
 
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::ffi::{c_char, c_int, c_void};
 #[cfg(debug_assertions)]
 use std::ffi::OsStr;
+use std::ffi::{c_char, c_int, c_void};
 #[cfg(debug_assertions)]
 use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

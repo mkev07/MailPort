@@ -26,6 +26,23 @@ pub struct Session {
     profiles: Profiles,
     password: Zeroizing<String>,
     touched: Instant,
+    paused_remaining: Option<Duration>,
+}
+impl Session {
+    fn remaining(&self) -> Duration {
+        self.paused_remaining
+            .unwrap_or_else(|| IDLE_LIMIT.saturating_sub(self.touched.elapsed()))
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        if paused && self.paused_remaining.is_none() {
+            self.paused_remaining = Some(self.remaining());
+        } else if !paused {
+            if let Some(remaining) = self.paused_remaining.take() {
+                self.touched = Instant::now() - IDLE_LIMIT.saturating_sub(remaining);
+            }
+        }
+    }
 }
 pub struct VaultState {
     pub path: PathBuf,
@@ -93,7 +110,7 @@ fn summaries(session: &Session) -> Vec<Summary> {
 fn expire(session: &mut Option<Session>) {
     if session
         .as_ref()
-        .is_some_and(|s| s.touched.elapsed() >= IDLE_LIMIT)
+        .is_some_and(|s| s.paused_remaining.is_none() && s.touched.elapsed() >= IDLE_LIMIT)
     {
         *session = None;
     }
@@ -108,7 +125,9 @@ fn with_session<T>(
     let session = guard
         .as_mut()
         .ok_or("Your vault is locked. Unlock it to continue.")?;
-    session.touched = Instant::now();
+    if session.paused_remaining.is_none() {
+        session.touched = Instant::now();
+    }
     f(session, &state.path)
 }
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
@@ -121,6 +140,41 @@ pub fn vault_session_active(state: tauri::State<VaultState>) -> Result<bool> {
     let mut session = state.session.lock().map_err(|_| "Vault is unavailable.")?;
     expire(&mut session);
     Ok(session.is_some())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoLockState {
+    remaining_seconds: u64,
+    paused: bool,
+}
+
+fn auto_lock_state(session: &Session) -> AutoLockState {
+    AutoLockState {
+        remaining_seconds: session.remaining().as_millis().div_ceil(1000) as u64,
+        paused: session.paused_remaining.is_some(),
+    }
+}
+
+#[tauri::command]
+pub fn vault_auto_lock_state(state: tauri::State<VaultState>) -> Result<Option<AutoLockState>> {
+    let mut session = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+    expire(&mut session);
+    Ok(session.as_ref().map(auto_lock_state))
+}
+
+#[tauri::command]
+pub fn vault_set_auto_lock_paused(
+    state: tauri::State<VaultState>,
+    paused: bool,
+) -> Result<AutoLockState> {
+    let mut guard = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+    expire(&mut guard);
+    let session = guard
+        .as_mut()
+        .ok_or("Your vault is locked. Unlock it to continue.")?;
+    session.set_paused(paused);
+    Ok(auto_lock_state(session))
 }
 
 #[tauri::command]
@@ -162,6 +216,7 @@ pub async fn vault_create(app: AppHandle, password: String) -> Result<()> {
             profiles,
             password,
             touched: Instant::now(),
+            paused_remaining: None,
         });
         Ok(())
     })
@@ -180,6 +235,7 @@ pub async fn vault_unlock(app: AppHandle, password: String) -> Result<()> {
             profiles,
             password,
             touched: Instant::now(),
+            paused_remaining: None,
         });
         Ok(())
     })
@@ -233,6 +289,7 @@ pub async fn vault_quick_unlock(app: AppHandle, method: QuickMethod) -> Result<(
             profiles,
             password,
             touched: Instant::now(),
+            paused_remaining: None,
         });
         Ok(())
     })
@@ -477,7 +534,10 @@ pub async fn vault_load_import_request(app: AppHandle) -> Result<Option<ExportRe
         with_session(&app, |_, _| Ok(()))?;
         let path = transfer_file_dialog(&app)
             .set_title("Open the .mailport-request file from your email app")
-            .add_filter("MailPort import request", &["mailport-request", "mailportrequest"])
+            .add_filter(
+                "MailPort import request",
+                &["mailport-request", "mailportrequest"],
+            )
             .blocking_pick_file();
         let Some(path) = path else {
             return Ok(None);
@@ -652,6 +712,7 @@ mod tests {
                 profiles: Profiles::default(),
                 password: Zeroizing::new("synthetic-session-only".into()),
                 touched,
+                paused_remaining: None,
             })
         };
         let mut expired = make(Instant::now() - IDLE_LIMIT - Duration::from_secs(1));
@@ -660,5 +721,29 @@ mod tests {
         let mut recent = make(Instant::now());
         expire(&mut recent);
         assert!(recent.is_some());
+    }
+
+    #[test]
+    fn pause_preserves_remaining_time_and_resume_restores_expiry() {
+        let mut session = Session {
+            accounts: vec![],
+            profiles: Profiles::default(),
+            password: Zeroizing::new("synthetic-session-only".into()),
+            touched: Instant::now() - Duration::from_secs(120),
+            paused_remaining: None,
+        };
+        session.set_paused(true);
+        let remaining = session.remaining();
+        session.touched = Instant::now() - IDLE_LIMIT - Duration::from_secs(1);
+        let mut slot = Some(session);
+        expire(&mut slot);
+        let session = slot.as_mut().unwrap();
+        assert_eq!(session.remaining(), remaining);
+        session.set_paused(false);
+        assert!(session.remaining() <= remaining);
+        assert!(session.remaining() > remaining - Duration::from_secs(1));
+        session.touched = Instant::now() - IDLE_LIMIT;
+        expire(&mut slot);
+        assert!(slot.is_none());
     }
 }

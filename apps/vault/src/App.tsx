@@ -76,6 +76,7 @@ type Status = {
   onePasswordAvailable: boolean;
   onePasswordEnabled: boolean;
 };
+type AutoLockState = { remainingSeconds: number; paused: boolean };
 type QuickMethod = "touchId" | "onePassword";
 type ExportRecipient = {
   requestFile: string;
@@ -1544,6 +1545,12 @@ export default function App() {
   }, []);
   const nextTheme = light ? "dark" : "light";
   const [status, setStatus] = useState<Status | null>(null);
+  const [autoLock, setAutoLock] = useState<AutoLockState | null>(null);
+  const [autoLockBusy, setAutoLockBusy] = useState(false);
+  const [autoLockHover, setAutoLockHover] = useState(false);
+  const [autoLockFocus, setAutoLockFocus] = useState(false);
+  const autoLockChanging = useRef(false);
+  const autoLockRevision = useRef(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [passphraseState, setPassphraseState] = useState<
@@ -1641,6 +1648,7 @@ export default function App() {
     if (fromPoll && manualUnlock.current) return;
     setStatus(next);
     if (!next.unlocked) {
+      setAutoLock(null);
       toast.dismiss();
       setUnlockSettings(false);
       setActiveId(undefined);
@@ -1668,17 +1676,21 @@ export default function App() {
     const timer = window.setInterval(() => {
       const update = async () => {
         if (manualUnlock.current) return;
-        if (
-          !statusRef.current?.unlocked ||
-          !(await invoke<boolean>("vault_session_active"))
-        ) {
+        if (!statusRef.current?.unlocked) {
           await refresh(true);
+        } else if (!autoLockChanging.current) {
+          const revision = autoLockRevision.current;
+          const state = await invoke<AutoLockState | null>("vault_auto_lock_state");
+          if (autoLockChanging.current || revision !== autoLockRevision.current) return;
+          if (state) setAutoLock(state);
+          else await refresh(true);
         }
       };
       void update().catch(() => {});
-    }, 2000);
+    }, 1000);
     let touched = 0;
-    const touch = () => {
+    const touch = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest(".auto-lock-control")) return;
       if (statusRef.current?.unlocked && Date.now() - touched > 15000) {
         touched = Date.now();
         void invoke("vault_touch").catch(() => {});
@@ -1694,6 +1706,21 @@ export default function App() {
       document.removeEventListener("keydown", touch);
     };
   }, []);
+  const toggleAutoLock = async () => {
+    if (!autoLock || autoLockChanging.current) return;
+    autoLockRevision.current += 1;
+    autoLockChanging.current = true;
+    setAutoLockBusy(true);
+    try {
+      setAutoLock(await invoke<AutoLockState>("vault_set_auto_lock_paused", { paused: !autoLock.paused }));
+    } catch {
+      setError("Could not change auto-lock. Check the vault and try again.");
+      await refresh().catch(() => {});
+    } finally {
+      autoLockChanging.current = false;
+      setAutoLockBusy(false);
+    }
+  };
   const editing = editor !== null;
   const isMac = document.documentElement.classList.contains("is-mac");
   useEffect(() => {
@@ -2349,6 +2376,34 @@ export default function App() {
                   </span>
                   <span className="profile-link-label">Lock vault</span>
                 </button>
+                <div
+                  className={`auto-lock-control${autoLockHover || autoLockFocus ? " is-revealed" : ""}`}
+                  aria-label="Auto-lock timer"
+                >
+                  <span className="auto-lock-time" aria-label={autoLock?.paused ? "Auto-lock paused" : "Time until auto-lock"}>
+                    {autoLock ? `${Math.floor(autoLock.remainingSeconds / 60)}:${String(autoLock.remainingSeconds % 60).padStart(2, "0")}` : "–:––"}
+                  </span>
+                  <button
+                    type="button"
+                    className="auto-lock-pause"
+                    data-control-glass
+                    aria-label={autoLock?.paused ? "Resume auto-lock" : "Pause auto-lock"}
+                    aria-pressed={autoLock?.paused ?? false}
+                    title={autoLock?.paused ? "Resume auto-lock" : "Pause auto-lock"}
+                    disabled={!autoLock || autoLockBusy || busy}
+                    onPointerEnter={(event) => { if (event.pointerType !== "touch") setAutoLockHover(true); }}
+                    onPointerLeave={() => setAutoLockHover(false)}
+                    onFocus={() => setAutoLockFocus(true)}
+                    onBlur={() => setAutoLockFocus(false)}
+                    onClick={() => void toggleAutoLock()}
+                  >
+                    {autoLock?.paused ? (
+                      <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M3.5 2.2 9.5 6l-6 3.8z" fill="currentColor" /></svg>
+                    ) : (
+                      <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12"><path d="M3.4 2.2h1.8v7.6H3.4zm3.4 0h1.8v7.6H6.8z" fill="currentColor" /></svg>
+                    )}
+                  </button>
+                </div>
               </div>
             </nav>
             <section className="account-pane" aria-labelledby="account-heading">

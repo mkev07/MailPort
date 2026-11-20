@@ -166,19 +166,63 @@ html.has-native-glass .vault-app {
 }
 .profile-lock-footer {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
   flex: none;
-  min-height: 59px;
+  min-height: 82px;
   margin: 0 -8px -10px;
-  padding-inline: 8px;
+  padding: 5px 8px 8px;
   border-block-start: 1px solid var(--vault-border);
 }
+.auto-lock-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding-inline: 6px;
+}
+.auto-lock-time {
+  color: var(--vault-muted);
+  font: 11px/1.2 var(--vault-mono);
+  font-variant-numeric: tabular-nums;
+}
+.auto-lock-control .auto-lock-pause[data-control-glass] {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--vault-text);
+  border: 0;
+  background: transparent;
+}
+.auto-lock-control.is-revealed .auto-lock-pause[data-control-glass] {
+  background: var(--vault-raised);
+  border: 1px solid var(--vault-border);
+}
+.vault-app .auto-lock-control.is-revealed .auto-lock-pause[data-native-glass] {
+  background: transparent;
+  border-color: transparent;
+}
+.auto-lock-pause:focus-visible {
+  outline: 2px solid var(--system-vault-accent, var(--vault-text));
+  outline-offset: 2px;
+}
+.profiles-collapsed .auto-lock-control {
+  gap: 1px;
+  padding-inline: 0;
+}
+.profiles-collapsed .auto-lock-time { font-size: 9px; }
+.profiles-collapsed .auto-lock-control .auto-lock-pause[data-control-glass] { width: 20px; height: 20px; }
 @media (max-width: 1040px) {
   .profile-lock-footer {
     align-self: stretch;
     min-height: 0;
     margin: 0;
-    padding-inline: 4px 0;
+    padding: 0 0 0 4px;
     border-block-start: 0;
     border-inline-start: 1px solid var(--vault-border);
   }

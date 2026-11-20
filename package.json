@@ -17,5 +17,8 @@
     "check:rust": "cargo test -p mailport-core",
     "check:compatibility": "npm run build --workspace @mailport/sdk && node scripts/check-compatibility.mjs",
     "check:session": "cargo test -p mailport --lib vault::tests"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from 'node:timers';
 import { Aes256Gcm, CipherSuite, DhkemX25519HkdfSha256, HkdfSha256 } from '@hpke/core';
 import { z } from 'zod';
 import { configureAccount, type ImportResult } from './import.js';
@@ -86,7 +87,7 @@ export class ImportRequestSession {
     private readonly info: Buffer,
   ) {
     this.#key = key;
-    this.#deadlineTimer = setTimeout(() => this.#expire(), expiresAt * 1000 - Date.now());
+    this.#deadlineTimer = setNodeTimeout(() => this.#expire(), expiresAt * 1000 - Date.now());
     this.#deadlineTimer.unref();
   }
 
@@ -111,7 +112,7 @@ export class ImportRequestSession {
   }
 
   #finish(state: 'used' | 'expired' | 'closed') {
-    clearTimeout(this.#deadlineTimer);
+    clearNodeTimeout(this.#deadlineTimer);
     this.#key = undefined;
     this.#state = state;
   }

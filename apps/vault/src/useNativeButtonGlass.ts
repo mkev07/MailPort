@@ -226,7 +226,7 @@ export function useNativeButtonGlass() {
               (dialog ?? app!).querySelectorAll<HTMLElement>(
                 dialog
                   ? "button, .profile-preview .profile-avatar"
-                  : "button:not(.account-heading-select, .account-button, .profile-link), .profile-sidebar .profile-link .profile-avatar, .appearance-slider-track",
+                  : "button:not(.account-heading-select, .account-button, .profile-link, .auto-lock-pause), .auto-lock-control.is-revealed .auto-lock-pause, .profile-sidebar .profile-link .profile-avatar, .appearance-slider-track",
               ),
             ),
           ]

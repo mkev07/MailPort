@@ -1,0 +1,2 @@
+# Patch context uses a leading space, including on empty lines.
+integrations/mailspring/*.patch -whitespace
