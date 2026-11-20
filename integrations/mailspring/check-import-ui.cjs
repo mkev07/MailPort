@@ -1,4 +1,4 @@
-// Synthetic end-to-end test. Uses a temporary profile and never prints secrets.
+// Synthetic transfers and interruption tests against disposable profiles.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -6,161 +6,217 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const { spawnSync } = require('node:child_process');
 
+const root = fs.realpathSync(process.argv[2]);
+const mode = process.argv[3] || 'success';
+assert.ok(['success', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race'].includes(mode));
+const mailspring = createRequire(path.join(root, 'package.json'));
+const { _electron } = mailspring('playwright');
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mailport-ui-test-'));
+const configPath = path.join(profile, 'config.json');
+const vector = require('../../docs/vectors/v1.json').accounts[0];
+const sample = {
+  ...vector,
+  email: 'ui-sample@example.com',
+  incoming: { ...vector.incoming, auth: { type: 'password', password: 'PUBLIC-SYNTHETIC-IMAP' } },
+  outgoing: { ...vector.outgoing, auth: { type: 'password', password: 'PUBLIC-SYNTHETIC-SMTP' } },
+};
+const another = { ...sample, id: '00000000-0000-4000-8000-000000000002', email: 'second-ui@example.com' };
+const env = { ...process.env, MAILPORT_PREVIEW: '1', PLAYWRIGHT: '1' };
+delete env.ELECTRON_RUN_AS_NODE;
+let attempt = 0;
+let app;
+
+async function launch() {
+  app = await _electron.launch({
+    executablePath: mailspring('electron'),
+    args: [path.join(root, 'app'), '--dev', '--config-dir-path', profile],
+    env, timeout: 30000,
+  });
+  await app.firstWindow();
+  await app.evaluate(async (_electron, expectedProfile) => {
+    for (let i = 0; i < 100 && !global.application?.configPersistenceManager; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (global.application.configPersistenceManager.configDirPath !== expectedProfile) {
+      throw new Error('Unexpected profile');
+    }
+  }, profile);
+}
+
+function config() {
+  return JSON.parse(fs.readFileSync(configPath, 'utf8'))['*'];
+}
+
+async function importPage() {
+  if ((config().accounts || []).length) {
+    await app.evaluate(() => global.application.emit('application:add-account'));
+  }
+  for (let i = 0; i < 100; i++) {
+    for (const page of app.windows()) {
+      if (await page.getByRole('button', { name: 'Create import request' }).isVisible().catch(() => false)) return page;
+      const choose = page.getByRole('button', { name: 'Import from MailPort' });
+      if (await choose.isVisible().catch(() => false)) await choose.click();
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error('MailPort import page did not open');
+}
+
+async function prepare(page, accounts) {
+  attempt++;
+  const request = path.join(profile, `test-${attempt}.mailport-request`);
+  const transfer = path.join(profile, `test-${attempt}.mailport`);
+  await app.evaluate(({ dialog }, files) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: files.request });
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [files.transfer] });
+  }, { request, transfer });
+  await page.getByRole('button', { name: 'Create import request' }).click();
+  await page.getByText('Request code:').waitFor();
+  const result = spawnSync(path.join(__dirname, '../../target/debug/examples/compatibility'), ['seal-transfer'], {
+    input: JSON.stringify({ requestFile: fs.readFileSync(request, 'utf8'), accounts, ids: accounts.map(account => account.id) }),
+    encoding: 'utf8', timeout: 30000,
+  });
+  assert.equal(result.status, 0, 'Rust transfer generation failed');
+  const sealed = JSON.parse(result.stdout);
+  assert.ok((await page.getByText('Request code:').innerText()).includes(sealed.verificationCode));
+  fs.writeFileSync(transfer, sealed.package, { mode: 0o600 });
+  await page.getByRole('button', { name: 'Open .mailport file' }).click();
+  await page.getByText('Transfer code:').waitFor();
+  assert.ok((await page.getByText('Transfer code:').innerText()).includes(sealed.packageCode));
+}
+
+function importAccounts(page) {
+  return page.getByRole('button', { name: 'Codes match · Import accounts' }).click();
+}
+
+async function assertSaved(accounts) {
+  const persisted = config();
+  assert.equal(persisted.accounts.length, accounts.length);
+  for (const account of accounts) {
+    const record = persisted.accounts.find(record => record.emailAddress === account.email);
+    assert.ok(record);
+    assert.equal(record.settings.imap_security, 'SSL / TLS');
+    assert.equal(record.settings.smtp_security, 'STARTTLS');
+    assert.ok(!('imap_password' in record.settings) && !('smtp_password' in record.settings));
+  }
+  const matches = await app.evaluate(async ({ safeStorage }, emails) => {
+    const fs = process.getBuiltinModule('node:fs');
+    const manager = global.application.configPersistenceManager;
+    const settings = JSON.parse(fs.readFileSync(manager.configFilePath, 'utf8'))['*'];
+    const decrypted = await safeStorage.decryptStringAsync(Buffer.from(settings.credentials.data));
+    const keys = JSON.parse(decrypted.result);
+    return emails.every(email => keys[`${email}-imap`] === 'PUBLIC-SYNTHETIC-IMAP' &&
+      keys[`${email}-smtp`] === 'PUBLIC-SYNTHETIC-SMTP');
+  }, accounts.map(account => account.email));
+  assert.equal(matches, true);
+}
+
+async function interruptWrite() {
+  await app.evaluate((_electron, failure) => {
+    const fs = process.getBuiltinModule('node:fs');
+    const manager = global.application.configPersistenceManager;
+    const rename = fs.renameSync;
+    fs.renameSync = (source, destination) => {
+      if (destination !== manager.configFilePath || !source.startsWith(`${destination}.mailport-`)) {
+        return rename(source, destination);
+      }
+      fs.renameSync = rename;
+      if (failure === 'write-error') throw new Error('Synthetic configuration write failure');
+      if (failure === 'crash-after') rename(source, destination);
+      process.kill(process.pid, 'SIGKILL');
+    };
+  }, mode);
+}
+
 async function main() {
-  const root = fs.realpathSync(process.argv[2]);
-  const requireMailspring = createRequire(path.join(root, 'package.json'));
-  const { _electron } = requireMailspring('playwright');
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mailport-ui-test-'));
-  const request = path.join(profile, 'test.mailport-request');
-  const transfer = path.join(profile, 'test.mailport');
-  const orphanCheck = process.argv.includes('--orphan');
-  const failKey = process.argv.includes('--fail-write') ? 'credentials' :
-    process.argv.includes('--fail-account') || orphanCheck ? 'accounts' : null;
-  let app;
-  try {
-    const env = { ...process.env, MAILPORT_PREVIEW: '1', PLAYWRIGHT: '1' };
-    delete env.ELECTRON_RUN_AS_NODE;
-    app = await _electron.launch({ executablePath: requireMailspring('electron'),
-      args: [path.join(root, 'app'), '--dev', '--config-dir-path', profile], env, timeout: 30000 });
-    await app.firstWindow();
-    await app.evaluate(async ({ dialog }, files) => {
-      for (let i = 0; i < 100 && !global.application?.configPersistenceManager; i++)
-        await new Promise(resolve => setTimeout(resolve, 100));
-      if (global.application.configPersistenceManager.configDirPath !== files.profile) throw new Error('Unexpected profile');
-      dialog.showSaveDialog = async () => ({ canceled: false, filePath: files.request });
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [files.transfer] });
-      if (files.failKey) {
-        const manager = global.application.configPersistenceManager;
-        const originalSet = manager.setRawValue;
-        const originalDialog = manager._showSaveErrorDialog;
-        let failing = false;
-        manager.setRawValue = (key, value, sender) => {
-          if (key === files.failKey) failing = true;
-          if (!failing) return originalSet(key, value, sender);
-          const previous = manager.configFilePath;
-          manager.configFilePath = `${previous}/invalid/config.json`;
-          manager._showSaveErrorDialog = () => 'ignore';
-          try { return originalSet(key, value, sender); }
-          finally { manager.configFilePath = previous; manager._showSaveErrorDialog = originalDialog; }
+  await launch();
+  if (mode === 'legacy-orphan' || mode === 'credential-conflict') {
+    await app.evaluate(async ({ safeStorage }, matching) => {
+      const manager = global.application.configPersistenceManager;
+      const keys = {
+        'ui-sample@example.com-imap': 'PUBLIC-SYNTHETIC-IMAP',
+        'ui-sample@example.com-smtp': matching ? 'PUBLIC-SYNTHETIC-SMTP' : 'PUBLIC-OTHER',
+      };
+      manager.setRawValue('credentials', (await safeStorage.encryptStringAsync(JSON.stringify(keys))).toJSON());
+    }, mode === 'legacy-orphan');
+    fs.writeFileSync(path.join(profile, 'mailport-import-pending'), 'MailPort preview import pending\n');
+  }
+
+  const page = await importPage();
+  await prepare(page, mode === 'success' ? [sample, another] : [sample]);
+  const before = fs.readFileSync(configPath, 'utf8');
+  const credentials = config().credentials;
+
+  if (mode.startsWith('crash-')) {
+    await interruptWrite();
+    const exited = new Promise(resolve => app.process().once('exit', (_code, signal) => resolve(signal)));
+    await importAccounts(page).catch(() => {});
+    assert.equal(await exited, 'SIGKILL');
+    app = undefined;
+    if (mode === 'crash-before') {
+      assert.equal(fs.readFileSync(configPath, 'utf8'), before);
+    } else {
+      assert.equal(config().accounts[0].emailAddress, sample.email);
+      assert.ok(config().credentials?.data);
+    }
+
+    await launch();
+    assert.ok(!fs.readdirSync(profile).some(name => name.startsWith('config.json.mailport-')));
+    if (mode === 'crash-after') await assertSaved([sample]);
+    const retryPage = await importPage();
+    await prepare(retryPage, [sample, another]);
+    await importAccounts(retryPage);
+    await retryPage.getByText('2 account(s) saved in the local profile.', { exact: false }).waitFor();
+    await assertSaved([sample, another]);
+    if (mode === 'crash-after') assert.equal(config().accounts.filter(item => item.emailAddress === sample.email).length, 1);
+  } else {
+    if (mode === 'write-error') await interruptWrite();
+    if (mode === 'credential-race') {
+      await app.evaluate(({ safeStorage }) => {
+        const encrypt = safeStorage.encryptStringAsync.bind(safeStorage);
+        safeStorage.encryptStringAsync = async plaintext => {
+          safeStorage.encryptStringAsync = encrypt;
+          const manager = global.application.configPersistenceManager;
+          const unrelated = await encrypt(JSON.stringify({ 'other@example.com-imap': 'PUBLIC-OTHER' }));
+          manager.replaceMailPortCredentials('null', unrelated.toJSON());
+          return encrypt(plaintext);
         };
-      }
-    }, { profile, request, transfer, failKey });
-    let page;
-    for (let i = 0; i < 100 && !page; i++) {
-      for (const candidate of app.windows()) {
-        if (await candidate.getByRole('button', { name: 'Create import request' }).isVisible().catch(() => false)) {
-          page = candidate;
-          break;
-        }
-      }
-      if (!page) await new Promise(resolve => setTimeout(resolve, 250));
+      });
     }
-    if (!page) throw new Error('MailPort import page did not open');
-    await page.getByRole('button', { name: 'Create import request' }).click({ timeout: 30000 });
-    await page.getByText('Request code:').waitFor();
-    const vector = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/vectors/v1.json'), 'utf8'));
-    const account = vector.accounts[0];
-    account.email = 'ui-sample@example.com';
-    account.incoming.auth = { type: 'password', password: 'PUBLIC-SYNTHETIC-IMAP' };
-    account.outgoing.auth = { type: 'password', password: 'PUBLIC-SYNTHETIC-SMTP' };
-    const result = spawnSync(path.join(__dirname, '../../target/debug/examples/compatibility'), ['seal-transfer'], {
-      input: JSON.stringify({ requestFile: fs.readFileSync(request, 'utf8'), accounts: [account], ids: [account.id] }), encoding: 'utf8',
-    });
-    assert.equal(result.status, 0, 'Rust transfer generation failed');
-    const sealed = JSON.parse(result.stdout);
-    assert.ok((await page.locator('body').innerText()).includes(sealed.verificationCode));
-    fs.writeFileSync(transfer, sealed.package, { mode: 0o600 });
-    await page.getByRole('button', { name: 'Open .mailport file' }).click();
-    await page.getByText('Transfer code:').waitFor();
-    assert.ok((await page.locator('body').innerText()).includes(sealed.packageCode));
-    await page.getByRole('button', { name: 'Codes match · Import accounts' }).click();
-    if (failKey) {
-      await page.getByText('A save may be incomplete.', { exact: false }).waitFor({ timeout: 30000 });
-      assert.equal(fs.existsSync(path.join(profile, 'mailport-import-pending')), true);
-      assert.ok((await page.locator('body').innerText()).includes('0 account(s) verified'));
-      const diskState = await app.evaluate(async ({ safeStorage }, expectedProfile) => {
-        const fs = process.getBuiltinModule('node:fs');
-        const path = process.getBuiltinModule('node:path');
-        if (global.application.configPersistenceManager.configDirPath !== expectedProfile) throw new Error('Unexpected profile');
-        const config = JSON.parse(fs.readFileSync(path.join(expectedProfile, 'config.json'), 'utf8'))['*'];
-        if (!config.credentials?.data) return { hasCredentials: false, hasAccount: (config.accounts || []).length > 0 };
-        const decrypted = await safeStorage.decryptStringAsync(Buffer.from(config.credentials.data));
-        const secrets = JSON.parse(decrypted.result);
-        return { hasCredentials: secrets['ui-sample@example.com-imap'] === 'PUBLIC-SYNTHETIC-IMAP' &&
-          secrets['ui-sample@example.com-smtp'] === 'PUBLIC-SYNTHETIC-SMTP', hasAccount: (config.accounts || []).length > 0 };
-      }, profile);
-      assert.deepEqual(diskState, { hasCredentials: failKey === 'accounts', hasAccount: false });
-      await app.close();
-      // Only this controlled temporary profile is modified: simulate an operator
-      // clearing a marker while leaving the known synthetic orphan in place.
-      if (orphanCheck) fs.unlinkSync(path.join(profile, 'mailport-import-pending'));
-      app = await _electron.launch({ executablePath: requireMailspring('electron'),
-        args: [path.join(root, 'app'), '--dev', '--config-dir-path', profile], env, timeout: 30000 });
-      await app.firstWindow();
-      const markerSurvived = await app.evaluate(async (_electron, expectedProfile) => {
-        const fs = process.getBuiltinModule('node:fs');
-        const path = process.getBuiltinModule('node:path');
-        for (let i = 0; i < 100 && !global.application?.configPersistenceManager; i++)
-          await new Promise(resolve => setTimeout(resolve, 100));
-        const manager = global.application.configPersistenceManager;
-        if (manager.configDirPath !== expectedProfile) throw new Error('Unexpected profile');
-        return fs.existsSync(path.join(expectedProfile, 'mailport-import-pending'));
-      }, profile);
-      assert.equal(markerSurvived, !orphanCheck);
-      let retryPage;
-      for (let i = 0; i < 100 && !retryPage; i++) {
-        for (const candidate of app.windows()) {
-          if (await candidate.getByRole('button', { name: 'Create import request' }).isVisible().catch(() => false)) {
-            retryPage = candidate;
-            break;
-          }
-        }
-        if (!retryPage) await new Promise(resolve => setTimeout(resolve, 250));
-      }
-      if (!retryPage) throw new Error('MailPort import page did not reopen');
-      if (orphanCheck) {
-        const retryRequest = path.join(profile, 'orphan.mailport-request');
-        const retryTransfer = path.join(profile, 'orphan.mailport');
-        await app.evaluate(({ dialog }, files) => {
-          dialog.showSaveDialog = async () => ({ canceled: false, filePath: files.request });
-          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [files.transfer] });
-        }, { request: retryRequest, transfer: retryTransfer });
-        const before = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'))['*'].credentials;
-        await retryPage.getByRole('button', { name: 'Create import request' }).click();
-        await retryPage.getByText('Request code:').waitFor();
-        const retry = spawnSync(path.join(__dirname, '../../target/debug/examples/compatibility'), ['seal-transfer'], {
-          input: JSON.stringify({ requestFile: fs.readFileSync(retryRequest, 'utf8'), accounts: [account], ids: [account.id] }), encoding: 'utf8',
+    await importAccounts(page);
+    if (mode === 'write-error' || mode === 'credential-conflict') {
+      await page.getByText('0 account(s) saved in the local profile.', { exact: false }).waitFor();
+      assert.equal(fs.readFileSync(configPath, 'utf8'), before);
+      if (mode === 'write-error') await importAccounts(page);
+    }
+    if (mode === 'credential-race') {
+      await page.getByText('0 account(s) saved in the local profile.', { exact: false }).waitFor();
+      assert.equal((config().accounts || []).length, 0);
+      assert.ok(config().credentials?.data);
+      await importAccounts(page);
+    }
+    if (mode !== 'credential-conflict') {
+      const expected = mode === 'success' ? [sample, another] : [sample];
+      await page.getByText(`${expected.length} account(s) saved in the local profile.`, { exact: false }).waitFor();
+      await assertSaved(expected);
+      if (mode === 'legacy-orphan') assert.deepEqual(config().credentials, credentials);
+      if (mode === 'credential-race') {
+        const preserved = await app.evaluate(async ({ safeStorage }) => {
+          const data = global.application.configPersistenceManager.settings.credentials.data;
+          const result = await safeStorage.decryptStringAsync(Buffer.from(data));
+          return JSON.parse(result.result)['other@example.com-imap'] === 'PUBLIC-OTHER';
         });
-        assert.equal(retry.status, 0, 'Rust transfer generation failed');
-        const retryPackage = JSON.parse(retry.stdout);
-        assert.ok((await retryPage.locator('body').innerText()).includes(retryPackage.verificationCode));
-        fs.writeFileSync(retryTransfer, retryPackage.package, { mode: 0o600 });
-        await retryPage.getByRole('button', { name: 'Open .mailport file' }).click();
-        await retryPage.getByText('Transfer code:').waitFor();
-        assert.ok((await retryPage.locator('body').innerText()).includes(retryPackage.packageCode));
-        await retryPage.getByRole('button', { name: 'Codes match · Import accounts' }).click();
-        await retryPage.getByText('existing account or credentials', { exact: false }).waitFor({ timeout: 30000 });
-        const after = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'))['*'];
-        assert.deepEqual(after.credentials, before);
-        assert.equal((after.accounts || []).length, 0);
-        assert.equal(fs.existsSync(path.join(profile, 'mailport-import-pending')), false);
-        console.log('Existing orphaned credentials were preserved and the UI import was rejected.');
-        return;
+        assert.equal(preserved, true);
       }
-      await retryPage.getByText('A previous import may be incomplete.', { exact: false }).waitFor({ timeout: 30000 });
-      assert.equal(await retryPage.getByRole('button', { name: 'Create import request' }).isDisabled(), true);
-      console.log('Injected write failure remained unverified; the pending marker blocked request creation after restart.');
-      return;
     }
-    await page.getByText('1 account(s) verified in the local profile.', { exact: false }).waitFor({ timeout: 30000 });
-    const stored = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'))['*'];
-    assert.equal(stored.accounts.length, 1);
-    assert.equal(stored.accounts[0].emailAddress, account.email);
-    assert.equal(fs.existsSync(path.join(profile, 'mailport-import-pending')), false);
-    console.log('Synthetic Rust-to-Mailspring UI import and persisted snapshot verification passed.');
-  } finally {
+  }
+  console.log(`Mailspring synthetic import check passed (${mode}).`);
+}
+
+main().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(async () => {
+  try {
     if (app) await app.close();
+  } finally {
     fs.rmSync(profile, { recursive: true, force: true });
   }
-}
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+});
