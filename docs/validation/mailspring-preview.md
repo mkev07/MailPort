@@ -38,6 +38,12 @@ Clang 19 for Electron 44.11.4 and used upstream's prebuilt Mailsync. Debian 12
 could compile the SQLite module with Clang 16, but its glibc was too old for
 that Mailsync binary and the app did not reach the import screen.
 
-These tests simulate process termination. Power loss, Windows runtime behavior,
-live mailbox connectivity, OAuth, distribution and independent security review
-remain unverified.
+All seven cases passed on the GitHub Actions Windows Server 2022 runner at
+`da72716`. The crash-after case verified that the restarted app could decrypt
+the saved credentials and that a new transfer could resume without duplicating
+the committed account. On Windows the preview waits for Chromium to write its
+DPAPI-wrapped key before saving new encrypted credentials.
+[Windows CI log](https://github.com/mkev07/MailPort/actions/runs/44730472305/job/136268617999)
+
+These tests simulate process termination. Power loss, live mailbox connectivity,
+OAuth, distribution and independent security review remain unverified.

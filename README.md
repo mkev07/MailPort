@@ -103,9 +103,12 @@ npm run check:compatibility
 ```
 
 The compatibility suite checks the Rust sender and Node receiver, including
-wrong-recipient handling, retry, expiry, and replay. The next milestone is
-to import accounts into a real email client, then verify the same file
-protocol with a second independent integration.
+wrong-recipient handling, retry, expiry, and replay. The Mailspring and
+Thunderbird previews exercise the same file protocol and save synthetic
+accounts using each client's credential store. See the
+[Mailspring results](docs/validation/mailspring-preview.md) and
+[Thunderbird feasibility notes](docs/validation/thunderbird-feasibility.md)
+for the verified behavior and remaining work.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute. MailPort is
 licensed under [MIT](LICENSE).
