@@ -73,7 +73,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb xauth dbus-x11
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb xauth dbus-x11 libfuse2t64 xdotool
       - run: npm ci
       - run: npm run vault:build -- ${{ matrix.args }}
       - run: cargo test --locked -p mailport --lib
@@ -87,10 +87,11 @@ jobs:
           done
           test -x "$RUNNER_TEMP/mailport-deb/usr/bin/MailPort"
           launch() {
-            local package="$1" data="$2"
+            local package="$1" data="$2" require_fuse="${3:-no}"
             mkdir -p "$data/config"
             echo "Launching $package"
-            XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$data/config" xvfb-run -a dbus-run-session -- \
+            XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$data/config" \
+              timeout --kill-after=5s 45s xvfb-run -a dbus-run-session -- \
               bash -euc '
                 "$1" &
                 pid=$!
@@ -103,6 +104,15 @@ jobs:
                     exit 1
                   fi
                   if test -d "$XDG_DATA_HOME/org.mailport.vault"; then
+                    if test "$2" = yes; then
+                      if ! xdotool search --onlyvisible --name "^MailPort Vault$" >/dev/null; then
+                        sleep 1
+                        continue
+                      fi
+                      findmnt --list --noheadings --output TARGET,FSTYPE |
+                        awk "\$1 ~ /\/\.mount_/ && \$2 ~ /^fuse([.]|\$)/ { mounted = 1 } END { exit !mounted }"
+                      echo "The AppImage opened its Vault window from a live FUSE mount"
+                    fi
                     sleep 2
                     kill -0 "$pid"
                     echo "MailPort initialized the isolated profile and stayed running"
@@ -112,11 +122,16 @@ jobs:
                 done
                 echo "MailPort did not initialize its isolated profile" >&2
                 exit 1
-              ' bash "$package"
+              ' bash "$package" "$require_fuse"
           }
           launch "$RUNNER_TEMP/mailport-deb/usr/bin/MailPort" "$RUNNER_TEMP/mailport-deb-profile"
           for package in target/debug/bundle/appimage/*.AppImage; do
             launch "$(realpath "$package")" "$RUNNER_TEMP/mailport-appimage-profile"
+            if ! test -c /dev/fuse; then
+              sudo modprobe fuse
+            fi
+            test -r /dev/fuse && test -w /dev/fuse
+            (unset APPIMAGE_EXTRACT_AND_RUN; launch "$(realpath "$package")" "$RUNNER_TEMP/mailport-appimage-fuse-profile" yes)
           done
       - if: runner.os == 'Windows'
         name: Install and launch the Windows preview
