@@ -77,19 +77,20 @@ index 988bd80..d0e7a34 100644
      );
    }
 diff --git a/app/src/browser/config-persistence-manager.ts b/app/src/browser/config-persistence-manager.ts
-index 19c4c20..695f38a 100644
+index 19c4c20..9941c9a 100644
 --- a/app/src/browser/config-persistence-manager.ts
 +++ b/app/src/browser/config-persistence-manager.ts
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,8 @@
  import path from 'path';
  import fs from 'fs';
 -import { BrowserWindow, dialog, app } from 'electron';
 +import { randomUUID } from 'crypto';
++import { setTimeout as delay } from 'node:timers/promises';
 +import { BrowserWindow, dialog, app, safeStorage } from 'electron';
  import { atomicWriteFileSync } from '../fs-utils';
  import { localized } from '../intl';
  
-@@ -26,6 +27,19 @@ export default class ConfigPersistenceManager {
+@@ -26,6 +28,19 @@ export default class ConfigPersistenceManager {
  
      this.initializeConfigDirectory();
      this.load();
@@ -109,7 +110,7 @@ index 19c4c20..695f38a 100644
    }
  
    initializeConfigDirectory() {
-@@ -156,6 +170,132 @@ export default class ConfigPersistenceManager {
+@@ -156,6 +171,150 @@ export default class ConfigPersistenceManager {
      }
    };
  
@@ -141,6 +142,23 @@ index 19c4c20..695f38a 100644
 +    const fd = fs.openSync(this.configDirPath, 'r');
 +    try { fs.fsyncSync(fd); }
 +    finally { fs.closeSync(fd); }
++  }
++
++  private async waitForMailPortWindowsKey() {
++    // Chromium writes its DPAPI-wrapped key to Local State on a deferred
++    // preference write. A fresh profile can encrypt before that write finishes.
++    const localState = path.join(app.getPath('sessionData'), 'Local State');
++    const deadline = performance.now() + 20000;
++    do {
++      const state = await fs.promises.readFile(localState, 'utf8').catch(error => {
++        if (error.code === 'ENOENT') return '{}';
++        throw error;
++      });
++      const key = JSON.parse(state).os_crypt?.encrypted_key;
++      if (typeof key === 'string' && key.length > 0) return;
++      await delay(100);
++    } while (performance.now() < deadline);
++    throw new Error('Windows secure storage is still initializing. Try importing again.');
 +  }
 +
 +  replaceMailPortCredentials = (expected: string, encrypted: object) => {
@@ -196,6 +214,7 @@ index 19c4c20..695f38a 100644
 +      if (process.platform === 'linux' && buffer.subarray(0, 3).toString() === 'v10') {
 +        throw new Error('Secure storage unavailable');
 +      }
++      if (process.platform === 'win32') await this.waitForMailPortWindowsKey();
 +      encrypted = buffer.toJSON();
 +    }
 +    // Encryption yields to other windows. Read current accounts at commit time and
