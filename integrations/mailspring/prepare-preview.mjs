@@ -3,6 +3,7 @@ import { constants, copyFileSync, existsSync, mkdtempSync, realpathSync, rmSync 
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../..');
@@ -21,10 +22,15 @@ execFileSync('git', ['apply', '--check', patch], { cwd: checkout, stdio: 'inheri
 const temp = mkdtempSync(join(tmpdir(), 'mailport-preview-'));
 try {
   const stagedBundle = join(temp, 'mailport-sdk.cjs');
-  execFileSync(join(root, 'node_modules/.bin/esbuild'), [
-    'packages/sdk/src/transfer.ts', '--bundle', '--platform=node', '--format=cjs', '--target=node22',
-    `--outfile=${stagedBundle}`,
-  ], { cwd: root, stdio: 'inherit' });
+  await build({
+    absWorkingDir: root,
+    entryPoints: ['packages/sdk/src/transfer.ts'],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node22',
+    outfile: stagedBundle,
+  });
   execFileSync('git', ['apply', patch], { cwd: checkout, stdio: 'inherit' });
   copyFileSync(stagedBundle, bundle, constants.COPYFILE_EXCL);
 } finally {

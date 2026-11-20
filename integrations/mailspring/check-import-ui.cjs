@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createRequire } = require('node:module');
 const { spawnSync } = require('node:child_process');
+const { once } = require('node:events');
 
 const root = fs.realpathSync(process.argv[2]);
 const mode = process.argv[3] || 'success';
@@ -13,6 +14,8 @@ const mailspring = createRequire(path.join(root, 'package.json'));
 const { _electron } = mailspring('playwright');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mailport-ui-test-'));
 const configPath = path.join(profile, 'config.json');
+const interruptionPath = path.join(profile, 'test-interruption');
+const binary = process.platform === 'win32' ? 'compatibility.exe' : 'compatibility';
 const vector = require('../../docs/vectors/v1.json').accounts[0];
 const sample = {
   ...vector,
@@ -72,7 +75,7 @@ async function prepare(page, accounts) {
   }, { request, transfer });
   await page.getByRole('button', { name: 'Create import request' }).click();
   await page.getByText('Request code:').waitFor();
-  const result = spawnSync(path.join(__dirname, '../../target/debug/examples/compatibility'), ['seal-transfer'], {
+  const result = spawnSync(path.join(__dirname, '../../target/debug/examples', binary), ['seal-transfer'], {
     input: JSON.stringify({ requestFile: fs.readFileSync(request, 'utf8'), accounts, ids: accounts.map(account => account.id) }),
     encoding: 'utf8', timeout: 30000,
   });
@@ -112,7 +115,7 @@ async function assertSaved(accounts) {
 }
 
 async function interruptWrite() {
-  await app.evaluate((_electron, failure) => {
+  await app.evaluate((_electron, { failure, marker }) => {
     const fs = process.getBuiltinModule('node:fs');
     const manager = global.application.configPersistenceManager;
     const rename = fs.renameSync;
@@ -123,9 +126,10 @@ async function interruptWrite() {
       fs.renameSync = rename;
       if (failure === 'write-error') throw new Error('Synthetic configuration write failure');
       if (failure === 'crash-after') rename(source, destination);
+      fs.writeFileSync(marker, failure);
       process.kill(process.pid, 'SIGKILL');
     };
-  }, mode);
+  }, { failure: mode, marker: interruptionPath });
 }
 
 async function main() {
@@ -149,9 +153,14 @@ async function main() {
 
   if (mode.startsWith('crash-')) {
     await interruptWrite();
-    const exited = new Promise(resolve => app.process().once('exit', (_code, signal) => resolve(signal)));
-    await importAccounts(page).catch(() => {});
-    assert.equal(await exited, 'SIGKILL');
+    const [exit] = await Promise.all([
+      once(app.process(), 'exit', { signal: AbortSignal.timeout(35000) }),
+      importAccounts(page).catch(() => {}),
+    ]);
+    const [code, signal] = exit;
+    assert.equal(fs.readFileSync(interruptionPath, 'utf8'), mode);
+    if (process.platform === 'win32') assert.ok(signal === 'SIGKILL' || (code !== null && code !== 0));
+    else assert.equal(signal, 'SIGKILL');
     app = undefined;
     if (mode === 'crash-before') {
       assert.equal(fs.readFileSync(configPath, 'utf8'), before);
@@ -213,10 +222,33 @@ async function main() {
   console.log(`Mailspring synthetic import check passed (${mode}).`);
 }
 
+async function closePreview() {
+  if (!app) return;
+  const child = app.process();
+  let timer;
+  try {
+    await Promise.race([
+      app.close(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Mailspring did not close within five seconds')), 5000);
+      }),
+    ]);
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit', { signal: AbortSignal.timeout(5000) });
+      child.kill('SIGKILL');
+      await exited;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 main().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(async () => {
   try {
-    if (app) await app.close();
+    await closePreview();
   } finally {
     fs.rmSync(profile, { recursive: true, force: true });
   }
-});
+}).catch(error => { console.error(error.message); process.exitCode = 1; });

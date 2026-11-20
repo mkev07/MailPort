@@ -27,6 +27,17 @@ error and retry, process termination on both sides of replacement, recovery of a
 matching legacy orphan, rejection of a conflicting orphan, and preservation of
 another credential update during import. They check
 persisted account records and encrypted credential read-back without printing
-passwords. Process termination tests do not simulate power loss. Windows and
-Linux runtime behavior, live mailbox connectivity, OAuth, distribution and
-independent security review remain outside this evidence.
+passwords. All seven also passed from a clean Apple Silicon macOS checkout with
+independently installed dependencies using Node.js 22.22.3 and npm 10.9.8.
+The upstream prebuilt Mailsync binary requires `mailspring` in its executable
+path. A checkout without that name stopped during startup with exit code 2.
+
+All seven cases also passed on Debian 13 ARM64 in Docker with Xvfb, a D-Bus
+session, and an unlocked GNOME Keyring. The clean install compiled SQLite with
+Clang 19 for Electron 44.11.4 and used upstream's prebuilt Mailsync. Debian 12
+could compile the SQLite module with Clang 16, but its glibc was too old for
+that Mailsync binary and the app did not reach the import screen.
+
+These tests simulate process termination. Power loss, Windows runtime behavior,
+live mailbox connectivity, OAuth, distribution and independent security review
+remain unverified.
