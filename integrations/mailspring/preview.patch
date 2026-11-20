@@ -243,7 +243,7 @@ index 19c4c20..695f38a 100644
      if (!this.settings || _.isEmpty(this.settings)) {
        throw new Error('this.settings is empty');
 diff --git a/app/src/browser/main.js b/app/src/browser/main.js
-index edaad0a..450af14 100644
+index edaad0a..a9cc631 100644
 --- a/app/src/browser/main.js
 +++ b/app/src/browser/main.js
 @@ -113,6 +113,7 @@ const declareOptions = argv => {
@@ -254,22 +254,14 @@ index edaad0a..450af14 100644
    options
      .alias('h', 'help')
      .boolean('h')
-@@ -220,6 +221,7 @@ const parseCommandLine = argv => {
-     jUnitXmlPath,
-     safeMode,
-     configDirPath,
-+    mailPortPreview: args['mailport-preview'] === true,
-     specDirectory,
-     specFilePattern,
-     showSpecsInWindow,
-@@ -349,6 +351,13 @@ const start = () => {
+@@ -349,6 +350,13 @@ const start = () => {
    app.commandLine.appendSwitch('js-flags', '--harmony');
  
    const options = parseCommandLine(process.argv);
 +  global.mailPortPreviewEnabled = Boolean(
 +    options.devMode &&
 +    options.configDirPath &&
-+    (options.mailPortPreview || process.env.MAILPORT_PREVIEW === '1')
++    (process.argv.includes('--mailport-preview') || process.env.MAILPORT_PREVIEW === '1')
 +  );
 +  if (global.mailPortPreviewEnabled) process.env.MAILPORT_PREVIEW = '1';
 +  else delete process.env.MAILPORT_PREVIEW;

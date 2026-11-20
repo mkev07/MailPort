@@ -52,7 +52,7 @@ async function launch() {
   app.on('window', observeWindow);
   for (const window of app.windows()) observeWindow(window);
   await app.firstWindow();
-  await app.evaluate(async (_electron, expectedProfile) => {
+  await app.evaluate(async ({ app: electronApp }, expectedProfile) => {
     for (let i = 0; i < 100 && !global.application?.configPersistenceManager; i++) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -60,7 +60,16 @@ async function launch() {
       throw new Error('Unexpected profile');
     }
     if (global.mailPortPreviewEnabled !== true) {
-      throw new Error('Mailspring did not enable preview mode for the disposable profile');
+      const diagnostics = {
+        packaged: electronApp.isPackaged,
+        devMode: global.application.devMode,
+        previewFlag: process.argv.includes('--mailport-preview'),
+        previewSwitch: electronApp.commandLine.hasSwitch('mailport-preview'),
+        devFlag: process.argv.includes('--dev'),
+        configFlag: process.argv.includes('--config-dir-path'),
+        previewBootstrap: typeof global.mailPortPreviewEnabled,
+      };
+      throw new Error(`Preview mode did not start: ${JSON.stringify(diagnostics)}`);
     }
   }, profile);
 }
