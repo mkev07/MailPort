@@ -40,14 +40,45 @@ The Windows and Linux jobs on `40fb45b` uploaded the
 `mailport-vault-windows-preview` and `mailport-vault-linux-preview` artifacts.
 [Hosted checks and downloads](https://github.com/mkev07/MailPort/actions/runs/44757263072)
 
+## Windows laptop acceptance
+
+The `40fb45b` NSIS preview installed and ran in the interactive Windows
+desktop with a fresh MailPort profile and five synthetic accounts.
+
+- Locking hid the accounts. The wrong passphrase was rejected. The app started
+  locked after a restart, and unlocking restored all five accounts.
+- The native file picker opened the SDK receiver's transfer request. Vault
+  rejected the request while the device clocks were substantially out of sync.
+  After the clocks were aligned, the request codes matched. Canceling the first
+  save kept the request usable, and retrying produced a package.
+- The SDK matched the exported package code and decoded exactly the two
+  selected accounts. The password account retained both server credentials
+  and the OAuth account still required provider sign-in.
+- The vault owner could read the encrypted file. A separate standard Windows
+  user was denied read access to that same file.
+
+## Linux Debian package acceptance
+
+The `d8947e6` Debian package from CI installed with `apt` on Ubuntu 24.04
+amd64 under Docker emulation on Apple Silicon. The installed executable ran
+under Xvfb and D-Bus with a fresh profile.
+
+- Created an encrypted vault with five synthetic accounts. Locking hid the
+  accounts and rejected a wrong passphrase. After restarting, the app
+  required unlock and restored all five accounts.
+- Opened the SDK request in the native GTK chooser and matched its code.
+  Canceling the first save left the request usable. Retrying saved an
+  encrypted package through the native dialog.
+- The vault and exported package both had mode 0600. The SDK verified the
+  displayed package code and decoded exactly the two selected accounts,
+  preserving the IMAP and SMTP credentials and pending OAuth sign-in.
+
 ## Remaining acceptance
 
-Use a disposable OS user account or VM for fresh-install checks. On each
-platform, launch the packaged Vault, create a synthetic vault,
-lock and unlock it, and save a transfer through the native dialog.
-On Windows, also check vault access from another local user account. On Linux,
-install the Debian package with the package manager and try the AppImage with
-FUSE on a desktop session. Windows signing remains open.
+Use a disposable macOS user account or VM to launch the signed Vault, create
+a synthetic vault, lock and unlock it, and approve and save a transfer through
+the native dialog. On Linux, repeat the vault workflow from the AppImage
+mounted with FUSE in a desktop session. Windows signing remains open.
 
 Full VoiceOver/screen-reader,
 keyboard-only end-to-end, zoom/contrast and real five-minute idle acceptance are
