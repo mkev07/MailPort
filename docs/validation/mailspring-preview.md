@@ -51,6 +51,20 @@ the committed account. On Windows the preview waits for Chromium to write its
 DPAPI-wrapped key before saving new encrypted credentials.
 [Windows CI log](https://github.com/mkev07/MailPort/actions/runs/44730472305/job/136268617999)
 
+## Mailspring 2.0 on macOS
+
+The preview patch also applied to Mailspring 2.0 at
+`0e97b0c354a0953d9d65fe8ad885973ff2fc9ec9`. On Apple Silicon macOS, the
+synthetic UI harness verified a two-account import, separate sign-in handling
+for an OAuth account, and recovery without duplication after the process
+stopped following a committed write. The setup script still uses the earlier
+baseline, which has broader recovery coverage.
+
+The next macOS check uses two dedicated test mailboxes in a fresh preview
+profile. Import both in one transfer, restart Mailspring, and verify that each
+mailbox can send a message and receive a reply. Record outcomes without
+including mailbox addresses, credentials, or message content.
+
 ## Send and receive with controlled servers
 
 The Mailspring preview on Debian 13 ARM64 imported two synthetic accounts,
