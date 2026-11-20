@@ -7,6 +7,10 @@ import {
   transferPackageCode,
   unlockVault,
 } from "../packages/sdk/dist/index.js";
+import {
+  ImportRequestSession as BrowserImportRequestSession,
+  transferPackageCode as browserTransferPackageCode,
+} from "../packages/sdk/dist/browser.js";
 const vector = JSON.parse(
   await readFile(new URL("../docs/vectors/v1.json", import.meta.url), "utf8"),
 );
@@ -154,3 +158,29 @@ try {
   expiring.close();
 }
 console.log("Rust-to-Node passwordless transfer passed, including wrong recipient, concurrent import, retry, expiry and replay checks.");
+
+const browserReceiver = await BrowserImportRequestSession.create("Browser Compatibility Client");
+try {
+  const sealed = JSON.parse(rust(["seal-transfer"], JSON.stringify({
+    requestFile: browserReceiver.requestFile, accounts, ids: selected.map(({ id }) => id),
+  })));
+  assert.equal(sealed.verificationCode, browserReceiver.verificationCode);
+  assert.equal(await browserTransferPackageCode(sealed.package), sealed.packageCode);
+  const saved = [];
+  const result = await browserReceiver.importPackage({
+    serialized: sealed.package,
+    verifiedCode: sealed.packageCode,
+    adapter: { async upsertAccount(account) { saved.push(account); } },
+  });
+  assert.deepEqual(saved, selected);
+  assert.deepEqual(result, {
+    completed: true,
+    results: [
+      { accountId: selected[0].id, status: "configured" },
+      { accountId: selected[1].id, status: "needs-sign-in" },
+    ],
+  });
+} finally {
+  browserReceiver.close();
+}
+console.log("The browser SDK bundle imported the same Rust transfer format.");

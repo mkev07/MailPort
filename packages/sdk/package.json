@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
     }
   },
   "files": [
@@ -20,7 +24,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node build-browser.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "test": "tsx --test test/import.test.ts test/vault.test.ts test/transfer.test.ts",
     "demo": "tsx examples/roundtrip.ts",

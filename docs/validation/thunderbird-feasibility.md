@@ -35,13 +35,14 @@ node integrations/thunderbird/check-transfer.mjs /Applications/Thunderbird.app/C
 ```
 
 The harness creates an offline temporary profile and launches a dedicated
-headless Thunderbird process. The Rust sender and Node SDK exchange
-`.mailport-request` and `.mailport` files and verify both comparison codes
-programmatically. The harness passes only its fixed synthetic fixtures to
-Thunderbird through its privileged loopback Marionette interface. Thunderbird
-creates the accounts using its native setup backend. The harness removes the
-profile on exit. The proof covers the transfer protocol and the Thunderbird
-adapter. A user-facing importer and an extension package remain future work.
+headless Thunderbird process. The bundled browser SDK creates the
+`.mailport-request` inside Thunderbird. The harness passes that file to the
+Rust sender and returns the encrypted `.mailport` package over its privileged
+loopback Marionette interface. The browser SDK verifies both comparison codes
+programmatically and decrypts inside Thunderbird. The harness checks that a
+wrong code prevents any account writes. Thunderbird creates the accounts using
+its native setup backend. The harness removes the profile on exit. A
+user-facing importer and an extension package remain future work.
 
 ## Observed behavior on macOS
 

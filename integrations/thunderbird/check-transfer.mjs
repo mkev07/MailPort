@@ -6,12 +6,18 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { ImportRequestSession, transferPackageCode } from "../../packages/sdk/dist/index.js";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 
 const executable = process.argv[2];
 if (!executable) throw new Error("Pass the Thunderbird executable path.");
 const root = new URL("../..", import.meta.url);
 const script = await readFile(new URL("./provision.js", import.meta.url), "utf8");
+const browserBuild = await build({
+  entryPoints: [fileURLToPath(new URL("../../packages/sdk/dist/browser.js", import.meta.url))],
+  bundle: true, platform: "browser", format: "iife", globalName: "MailPortBrowser", write: false,
+});
+const browserBundle = browserBuild.outputFiles[0].text;
 const artifacts = execFileSync("cargo", [
   "build", "--locked", "-p", "mailport-core", "--example", "compatibility", "--message-format=json",
 ], { cwd: root, encoding: "utf8", timeout: 180000, stdio: ["ignore", "pipe", "inherit"] });
@@ -164,13 +170,41 @@ async function provision(account, inspectOnly = false) {
   return result.value;
 }
 
+async function browserCommand(owner, body, args = []) {
+  const { value } = await owner.command("WebDriver:ExecuteAsyncScript", {
+    sandbox: "system",
+    newSandbox: false,
+    script: `const done = arguments[arguments.length - 1];
+      (async () => { ${body} })().then(value => done({ value }), error => done({
+        error: typeof error.code === "string" ? error.code : "BROWSER_RECEIVER",
+      }));`,
+    args,
+  });
+  if (value.error) throw new Error(`Thunderbird receiver failed: ${value.error}`);
+  return value.value;
+}
+
 let attempt = 0;
-async function transfer(selected, { stopAfterFirst = false } = {}) {
-  const request = await ImportRequestSession.create("Thunderbird synthetic preview");
+async function transfer(selected, { stopAfterFirst = false, expectProcessExit = false } = {}) {
+  const owner = instance;
+  if (!owner.browserLoaded) {
+    await browserCommand(owner, `
+      if (typeof Buffer !== "undefined" || typeof require !== "undefined") {
+        throw new Error("Expected a browser runtime");
+      }
+      ${browserBundle}
+      globalThis.mailPortBrowser = MailPortBrowser;
+      return null;
+    `);
+    owner.browserLoaded = true;
+  }
+  const request = await browserCommand(owner, `
+    const session = await globalThis.mailPortBrowser.ImportRequestSession.create("Thunderbird synthetic preview");
+    globalThis.mailPortSession = session;
+    return { requestFile: session.requestFile, verificationCode: session.verificationCode };
+  `);
   const requestPath = join(profile, `test-${++attempt}.mailport-request`);
   const packagePath = join(profile, `test-${attempt}.mailport`);
-  const controller = new AbortController();
-  const observed = [];
   try {
     await writeFile(requestPath, request.requestFile, { mode: 0o600 });
     const sealed = JSON.parse(execFileSync(sender, ["seal-transfer"], {
@@ -182,20 +216,50 @@ async function transfer(selected, { stopAfterFirst = false } = {}) {
     assert.equal(sealed.verificationCode, request.verificationCode);
     await writeFile(packagePath, sealed.package, { mode: 0o600 });
     const serialized = await readFile(packagePath, "utf8");
-    assert.equal(transferPackageCode(serialized), sealed.packageCode);
-    const result = await request.importPackage({
-      serialized, verifiedCode: sealed.packageCode,
-      signal: controller.signal,
-      adapter: {
-        async upsertAccount(account) {
-          observed.push(await provision(account));
-          if (stopAfterFirst) controller.abort();
+    return await browserCommand(owner, `
+      ${script}
+      const [serialized, verifiedCode, stopAfterFirst] = arguments;
+      const session = globalThis.mailPortSession;
+      if (await globalThis.mailPortBrowser.transferPackageCode(serialized) !== verifiedCode) {
+        throw new Error("Transfer code mismatch");
+      }
+      const wrongCode = (verifiedCode[0] === "0" ? "1" : "0") + verifiedCode.slice(1);
+      let called = false;
+      try {
+        await session.importPackage({
+          serialized, verifiedCode: wrongCode,
+          adapter: { async upsertAccount() { called = true; } },
+        });
+        throw new Error("Unverified transfer was accepted");
+      } catch (error) {
+        if (called || error.code !== "CODE_MISMATCH") throw error;
+      }
+      const controller = new AbortController();
+      const observed = [];
+      const result = await session.importPackage({
+        serialized, verifiedCode, signal: controller.signal,
+        adapter: {
+          async upsertAccount(account) {
+            observed.push(await provision(account, false));
+            if (stopAfterFirst) controller.abort();
+          },
         },
-      },
-    });
-    return { statuses: result.results.map(item => item.status), observed };
+      });
+      return { statuses: result.results.map(item => item.status), observed };
+    `, [serialized, sealed.packageCode, stopAfterFirst]);
+  } catch (error) {
+    if (!expectProcessExit || instance === owner) throw error;
+    const [, signal] = await owner.exited;
+    if (signal !== "SIGKILL") throw error;
+    return { statuses: selected.map(() => "failed"), observed: [] };
   } finally {
-    request.close();
+    if (instance === owner) {
+      await browserCommand(owner, `
+        globalThis.mailPortSession?.close();
+        delete globalThis.mailPortSession;
+        return null;
+      `);
+    }
   }
 }
 
@@ -244,7 +308,7 @@ async function interruptAccountSetup(account, boundary) {
       };`,
     args: [barrier, boundary],
   });
-  const pending = transfer([account]);
+  const pending = transfer([account], { expectProcessExit: true });
   const { smtpKey } = JSON.parse(await waitFor(() => readIfPresent(barrier), "native account-write boundary"));
   assert.ok(smtpKey);
   const prefs = await readFile(join(profile, "prefs.js"), "utf8");
@@ -313,7 +377,7 @@ try {
       };`,
     args: [],
   });
-  const partial = transfer([interrupted]);
+  const partial = transfer([interrupted], { expectProcessExit: true });
   // Thunderbird has saved the incoming login while the outgoing save is blocked.
   const partialLogins = await assertEncrypted(5);
   const journalPath = join(profile, "mailport-pending.json");
