@@ -28,13 +28,28 @@ const env = { ...process.env, MAILPORT_PREVIEW: '1', PLAYWRIGHT: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
 let attempt = 0;
 let app;
+const rendererErrors = [];
+
+function observeWindow(page) {
+  const capture = message => {
+    rendererErrors.push(String(message).slice(0, 1500));
+    if (rendererErrors.length > 10) rendererErrors.shift();
+  };
+  page.on('pageerror', capture);
+  page.on('console', message => {
+    if (message.type() === 'error') capture(message.text());
+  });
+}
 
 async function launch() {
+  rendererErrors.length = 0;
   app = await _electron.launch({
     executablePath: mailspring('electron'),
-    args: [path.join(root, 'app'), '--dev', '--config-dir-path', profile],
+    args: [path.join(root, 'app'), '--dev', '--enable-logging', '--config-dir-path', profile],
     env, timeout: 30000,
   });
+  app.on('window', observeWindow);
+  for (const window of app.windows()) observeWindow(window);
   await app.firstWindow();
   await app.evaluate(async (_electron, expectedProfile) => {
     for (let i = 0; i < 100 && !global.application?.configPersistenceManager; i++) {
@@ -62,7 +77,11 @@ async function importPage() {
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error('MailPort import page did not open');
+  const windows = await Promise.all(app.windows().map(async page => ({
+    title: await page.title().catch(() => ''),
+    text: await page.locator('body').innerText({ timeout: 1000 }).then(text => text.slice(0, 800), () => ''),
+  })));
+  throw new Error(`MailPort import page did not open. Windows: ${JSON.stringify(windows)}. Renderer errors: ${JSON.stringify(rendererErrors)}`);
 }
 
 async function prepare(page, accounts) {
