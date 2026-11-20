@@ -23,7 +23,8 @@ patch, and builds its local SDK bundle. It builds the bundle before applying the
 patch and refuses to overwrite an existing bundle. If applying or copying fails,
 inspect the checkout before retrying; it may contain a partially prepared preview.
 The patch includes a test-only onboarding
-bypass and disables automatic login-item changes only when `MAILPORT_PREVIEW=1`.
+bypass and disables automatic login-item changes only when the preview is enabled
+for a development build with an explicit profile path.
 It must not be enabled for real credentials or merged upstream as-is.
 
 Install dependencies from inside the Mailspring checkout. The clean macOS
@@ -37,7 +38,7 @@ npx --yes --package npm@10.9.8 -c 'npm ci --no-audit'
 Run the preview with a dedicated configuration directory:
 
 ```sh
-env -u ELECTRON_RUN_AS_NODE MAILPORT_PREVIEW=1 npm start -- --config-dir-path /tmp/mailport-mailspring-e2e
+env -u ELECTRON_RUN_AS_NODE npm start -- --mailport-preview --config-dir-path /tmp/mailport-mailspring-e2e
 ```
 
 This starts a separate profile for synthetic password accounts. The preview

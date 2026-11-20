@@ -1,5 +1,5 @@
 diff --git a/app/internal_packages/onboarding/lib/main.ts b/app/internal_packages/onboarding/lib/main.ts
-index f1d0eb3..93faa07 100644
+index f1d0eb3..7ee2705 100644
 --- a/app/internal_packages/onboarding/lib/main.ts
 +++ b/app/internal_packages/onboarding/lib/main.ts
 @@ -12,7 +12,7 @@ export function activate() {
@@ -7,7 +7,7 @@ index f1d0eb3..93faa07 100644
    const accounts = AppEnv.config.get('accounts') || [];
  
 -  if (accounts.length === 0) {
-+  if (accounts.length === 0 && !process.env.MAILPORT_PREVIEW) {
++  if (accounts.length === 0 && !AppEnv.config.isMailPortPreview()) {
      const startService = new SystemStartService();
      startService.checkAvailability().then((available) => {
        if (!available) {
@@ -45,7 +45,7 @@ index f614729..00bbc90 100644
    'initial-preferences': InitialPreferencesPage,
    'initial-subscription': InitialSubscriptionPage,
 diff --git a/app/internal_packages/onboarding/lib/onboarding-store.ts b/app/internal_packages/onboarding/lib/onboarding-store.ts
-index b42d208..343d93b 100644
+index b42d208..5e6303e 100644
 --- a/app/internal_packages/onboarding/lib/onboarding-store.ts
 +++ b/app/internal_packages/onboarding/lib/onboarding-store.ts
 @@ -40,7 +40,10 @@ class OnboardingStore extends MailspringStore {
@@ -53,7 +53,7 @@ index b42d208..343d93b 100644
      });
  
 -    if (existingAccountJSON) {
-+    if (process.env.MAILPORT_PREVIEW && !hasAccounts) {
++    if (AppEnv.config.isMailPortPreview() && !hasAccounts) {
 +      // Isolated synthetic-data preview only; never bypass sign-in in normal builds.
 +      this._pageStack = ['account-choose', 'mailport-import'];
 +    } else if (existingAccountJSON) {
@@ -61,14 +61,14 @@ index b42d208..343d93b 100644
        // to the best page with the most details
        this._account = new Account({}).fromJSON(existingAccountJSON);
 diff --git a/app/internal_packages/onboarding/lib/page-account-choose.tsx b/app/internal_packages/onboarding/lib/page-account-choose.tsx
-index 988bd80..ada724f 100644
+index 988bd80..d0e7a34 100644
 --- a/app/internal_packages/onboarding/lib/page-account-choose.tsx
 +++ b/app/internal_packages/onboarding/lib/page-account-choose.tsx
 @@ -27,6 +27,11 @@ export default class AccountChoosePage extends React.Component<{ account?: objec
        <div className="page account-choose">
          <h2>{localized('Connect an email account')}</h2>
          <div className="provider-list">{this._renderProviders()}</div>
-+        {process.env.MAILPORT_PREVIEW === '1' && (
++        {AppEnv.config.isMailPortPreview() && (
 +          <button type="button" onClick={() => OnboardingActions.moveToPage('mailport-import')}>
 +            Import from MailPort
 +          </button>
@@ -77,7 +77,7 @@ index 988bd80..ada724f 100644
      );
    }
 diff --git a/app/src/browser/config-persistence-manager.ts b/app/src/browser/config-persistence-manager.ts
-index 19c4c20..daf9137 100644
+index 19c4c20..695f38a 100644
 --- a/app/src/browser/config-persistence-manager.ts
 +++ b/app/src/browser/config-persistence-manager.ts
 @@ -1,6 +1,7 @@
@@ -89,14 +89,16 @@ index 19c4c20..daf9137 100644
  import { atomicWriteFileSync } from '../fs-utils';
  import { localized } from '../intl';
  
-@@ -26,6 +27,17 @@ export default class ConfigPersistenceManager {
+@@ -26,6 +27,19 @@ export default class ConfigPersistenceManager {
  
      this.initializeConfigDirectory();
      this.load();
-+    if (process.env.MAILPORT_PREVIEW === '1' && !this.userWantsToPreserveErrors) {
++    if (this.isMailPortPreview() && !this.userWantsToPreserveErrors) {
 +      this.cleanMailPortStaging();
 +    }
 +  }
++
++  isMailPortPreview = () => global.mailPortPreviewEnabled === true;
 +
 +  private cleanMailPortStaging() {
 +    for (const entry of fs.readdirSync(this.configDirPath)) {
@@ -107,13 +109,13 @@ index 19c4c20..daf9137 100644
    }
  
    initializeConfigDirectory() {
-@@ -156,6 +168,132 @@ export default class ConfigPersistenceManager {
+@@ -156,6 +170,132 @@ export default class ConfigPersistenceManager {
      }
    };
  
 +  // Preview writes publish only after the entire replacement has reached the filesystem.
 +  private writeMailPortSettings = (nextSettings: object) => {
-+    if (process.env.MAILPORT_PREVIEW !== '1' || this.userWantsToPreserveErrors) {
++    if (!this.isMailPortPreview() || this.userWantsToPreserveErrors) {
 +      throw new Error('Preview configuration is unavailable');
 +    }
 +    const staging = `${this.configFilePath}.mailport-${randomUUID()}.tmp`;
@@ -149,7 +151,7 @@ index 19c4c20..daf9137 100644
 +  };
 +
 +  importMailPortAccount = async (json: string) => {
-+    if (process.env.MAILPORT_PREVIEW !== '1') throw new Error('Preview is unavailable');
++    if (!this.isMailPortPreview()) throw new Error('Preview is unavailable');
 +    const account = JSON.parse(json);
 +    const { imap_password: imap, smtp_password: smtp, ...settings } = account.settings;
 +    if (account.provider !== 'imap' || typeof imap !== 'string' || typeof smtp !== 'string' ||
@@ -240,14 +242,82 @@ index 19c4c20..daf9137 100644
    getRawValuesString = () => {
      if (!this.settings || _.isEmpty(this.settings)) {
        throw new Error('this.settings is empty');
+diff --git a/app/src/browser/main.js b/app/src/browser/main.js
+index edaad0a..450af14 100644
+--- a/app/src/browser/main.js
++++ b/app/src/browser/main.js
+@@ -113,6 +113,7 @@ const declareOptions = argv => {
+   options.boolean('enable-crashpad');
+   options.boolean('allow-file-access-from-files');
+   options.boolean('source-app-id');
++  options.boolean('mailport-preview');
+   options
+     .alias('h', 'help')
+     .boolean('h')
+@@ -220,6 +221,7 @@ const parseCommandLine = argv => {
+     jUnitXmlPath,
+     safeMode,
+     configDirPath,
++    mailPortPreview: args['mailport-preview'] === true,
+     specDirectory,
+     specFilePattern,
+     showSpecsInWindow,
+@@ -349,6 +351,13 @@ const start = () => {
+   app.commandLine.appendSwitch('js-flags', '--harmony');
+ 
+   const options = parseCommandLine(process.argv);
++  global.mailPortPreviewEnabled = Boolean(
++    options.devMode &&
++    options.configDirPath &&
++    (options.mailPortPreview || process.env.MAILPORT_PREVIEW === '1')
++  );
++  if (global.mailPortPreviewEnabled) process.env.MAILPORT_PREVIEW = '1';
++  else delete process.env.MAILPORT_PREVIEW;
+   global.errorLogger = setupErrorLogger(options);
+   const configDirPath = setupConfigDir(options);
+   options.configDirPath = configDirPath;
+diff --git a/app/src/compile-cache-ts.js b/app/src/compile-cache-ts.js
+index 68f58cf..1e28302 100644
+--- a/app/src/compile-cache-ts.js
++++ b/app/src/compile-cache-ts.js
+@@ -39,7 +39,24 @@ function writeCachedJavascript(relativeCachePath, code) {
+   const cachePath = path.join(cacheDirectory, relativeCachePath);
+   fs.mkdirSync(path.dirname(cacheTmpPath), { recursive: true });
+   fs.writeFileSync(cacheTmpPath, code, 'utf8');
+-  fs.renameSync(cacheTmpPath, cachePath);
++  try {
++    fs.renameSync(cacheTmpPath, cachePath);
++  } catch (error) {
++    // Windows can lock the cache destination while another renderer reads it.
++    // The preview can still use the JavaScript already compiled in memory.
++    if (
++      process.platform !== 'win32' ||
++      process.env.MAILPORT_PREVIEW !== '1' ||
++      !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)
++    ) {
++      throw error;
++    }
++    try {
++      fs.unlinkSync(cacheTmpPath);
++    } catch {
++      // The disposable cache may still be locked.
++    }
++  }
+ }
+ 
+ function addSourceURL(jsCode, filePath) {
 diff --git a/app/src/config.ts b/app/src/config.ts
-index 3034943..90a589d 100644
+index 3034943..c03676e 100644
 --- a/app/src/config.ts
 +++ b/app/src/config.ts
-@@ -743,6 +743,14 @@ export default class Config {
+@@ -743,6 +743,18 @@ export default class Config {
      }
    }
  
++  isMailPortPreview(): boolean {
++    return app.configPersistenceManager?.isMailPortPreview() === true;
++  }
++
 +  async importMailPortAccount(json: string) {
 +    await app.configPersistenceManager.importMailPortAccount(json);
 +  }
@@ -260,7 +330,7 @@ index 3034943..90a589d 100644
      app.configPersistenceManager.setRawValue(keyPath, value, webContentsId);
      this.load();
 diff --git a/app/src/key-manager.ts b/app/src/key-manager.ts
-index 3fb1181..06a6ed8 100644
+index 3fb1181..ae5f997 100644
 --- a/app/src/key-manager.ts
 +++ b/app/src/key-manager.ts
 @@ -43,6 +43,7 @@ const usesPlaintextFallbackKey = (encrypted: Buffer) =>
@@ -276,7 +346,7 @@ index 3fb1181..06a6ed8 100644
    async _getKeyHash(): Promise<KeySet> {
      const encryptedCredentials = AppEnv.config.get(configCredentialsKey);
 +    const rememberSnapshot = (keys: KeySet) => {
-+      if (process.env.MAILPORT_PREVIEW === '1') {
++      if (AppEnv.config.isMailPortPreview()) {
 +        this._mailPortCredentialSnapshots.set(keys, JSON.stringify(encryptedCredentials ?? null));
 +      }
 +      return keys;
@@ -310,7 +380,7 @@ index 3fb1181..06a6ed8 100644
        throw unavailable();
      }
 -    AppEnv.config.set(configCredentialsKey, encryptedCredentials);
-+    if (process.env.MAILPORT_PREVIEW === '1') {
++    if (AppEnv.config.isMailPortPreview()) {
 +      const expected = this._mailPortCredentialSnapshots.get(keys);
 +      AppEnv.config.replaceMailPortCredentials(expected, encryptedCredentials);
 +      this._mailPortCredentialSnapshots.set(keys, JSON.stringify(encryptedCredentials));
@@ -320,270 +390,8 @@ index 3fb1181..06a6ed8 100644
    }
  
    _reportFatalError(err: Error): never {
-diff --git a/app/internal_packages/onboarding/lib/mailport-adapter.ts b/app/internal_packages/onboarding/lib/mailport-adapter.ts
-new file mode 100644
-index 0000000..262d2a8
---- /dev/null
-+++ b/app/internal_packages/onboarding/lib/mailport-adapter.ts
-@@ -0,0 +1,25 @@
-+// The preview maps password accounts into the preview’s atomic configuration write.
-+export function createMailPortAdapter({ makeAccount, save, idForAccount }) {
-+  return {
-+    async upsertAccount(source) {
-+      if (source.incoming.auth.type !== 'password' || source.outgoing.auth.type !== 'password') {
-+        throw new Error('Provider sign-in is not supported by this preview');
-+      }
-+      const settings = {
-+        imap_host: source.incoming.host, imap_port: source.incoming.port,
-+        imap_username: source.incoming.username, imap_password: source.incoming.auth.password,
-+        imap_security: source.incoming.security === 'tls' ? 'SSL / TLS' : 'STARTTLS',
-+        smtp_host: source.outgoing.host, smtp_port: source.outgoing.port,
-+        smtp_username: source.outgoing.username, smtp_password: source.outgoing.auth.password,
-+        smtp_security: source.outgoing.security === 'tls' ? 'SSL / TLS' : 'STARTTLS',
-+        imap_allow_insecure_ssl: false, smtp_allow_insecure_ssl: false,
-+      };
-+      const id = idForAccount(source.email, settings);
-+      const account = makeAccount({
-+        id, emailAddress: source.email, name: source.displayName || source.email,
-+        provider: 'imap', settings,
-+      });
-+      await save(account);
-+    },
-+  };
-+}
-diff --git a/app/internal_packages/onboarding/lib/page-mailport-import.tsx b/app/internal_packages/onboarding/lib/page-mailport-import.tsx
-new file mode 100644
-index 0000000..0fe258f
---- /dev/null
-+++ b/app/internal_packages/onboarding/lib/page-mailport-import.tsx
-@@ -0,0 +1,147 @@
-+import React from 'react';
-+import fs from 'fs';
-+import { ipcRenderer } from 'electron';
-+import { Account, AccountStore } from 'mailspring-exports';
-+import { idForAccount } from './onboarding-helpers';
-+import { createMailPortAdapter } from './mailport-adapter';
-+import * as OnboardingActions from './onboarding-actions';
-+
-+// Local proof of concept: bundled from MailPort's reference SDK, not an upstream dependency.
-+const { ImportRequestSession, transferPackageCode } = require('./mailport-sdk.cjs');
-+const { app, dialog, getCurrentWindow } = require('@electron/remote');
-+
-+type State = {
-+  requestCode: string;
-+  transferCode: string;
-+  message: string;
-+  busy: boolean;
-+  completed: boolean;
-+};
-+
-+export default class MailPortImportPage extends React.Component<Record<string, never>, State> {
-+  state: State = { requestCode: '', transferCode: '', message: '', busy: false, completed: false };
-+  private session: any;
-+  private serialized: string | null = null;
-+  private alive = true;
-+  private wasFirstAccount = false;
-+  private abort = new AbortController();
-+  private adapter = createMailPortAdapter({
-+    makeAccount: (data) => new Account(data),
-+    save: (account: Account) => AppEnv.config.importMailPortAccount(JSON.stringify(account.toJSON())),
-+    idForAccount,
-+  });
-+
-+  componentWillUnmount() {
-+    this.alive = false;
-+    this.abort.abort();
-+    this.serialized = null;
-+    if (this.session && !this.state.busy) this.session.close();
-+  }
-+
-+  private update(next: Partial<State>) {
-+    if (this.alive) this.setState(next as Pick<State, keyof State>);
-+  }
-+
-+  private start = async () => {
-+    this.update({ busy: true, message: '' });
-+    let session: any;
-+    try {
-+      const result = await dialog.showSaveDialog(getCurrentWindow(), {
-+        title: 'Save MailPort import request',
-+        defaultPath: 'Mailspring.mailport-request',
-+        filters: [{ name: 'MailPort import request', extensions: ['mailport-request'] }],
-+      });
-+      if (result.canceled || !result.filePath) return;
-+      session = await ImportRequestSession.create('Mailspring');
-+      await fs.promises.writeFile(result.filePath, session.requestFile, { flag: 'wx', mode: 0o600 });
-+      if (!this.alive) { session.close(); return; }
-+      this.session = session;
-+      this.wasFirstAccount = AccountStore.accounts().length === 0;
-+      this.update({ requestCode: session.verificationCode, message: 'Open this request in MailPort and compare the request code. This request expires in 15 minutes.' });
-+    } catch {
-+      if (session) session.close();
-+      this.update({ message: 'Could not create the request. Choose a new filename and try again.' });
-+    } finally {
-+      this.update({ busy: false });
-+    }
-+  };
-+
-+  private choosePackage = async () => {
-+    this.update({ busy: true, message: '' });
-+    try {
-+      const result = await dialog.showOpenDialog(getCurrentWindow(), {
-+        title: 'Open MailPort transfer',
-+        properties: ['openFile'],
-+        filters: [{ name: 'MailPort transfer', extensions: ['mailport'] }],
-+      });
-+      if (result.canceled || !result.filePaths[0]) return;
-+      const file = await fs.promises.open(result.filePaths[0], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
-+      let serialized: string;
-+      try {
-+        const stat = await file.stat();
-+        if (!stat.isFile() || stat.size > 4 * 1024 * 1024) throw new Error('Invalid file');
-+        const chunks: Buffer[] = [];
-+        let size = 0;
-+        for await (const chunk of file.createReadStream({ autoClose: false })) {
-+          size += chunk.length;
-+          if (size > 4 * 1024 * 1024) throw new Error('Invalid file');
-+          chunks.push(chunk as Buffer);
-+        }
-+        serialized = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks));
-+      } finally { await file.close(); }
-+      const code = transferPackageCode(serialized);
-+      this.serialized = serialized;
-+      this.update({ transferCode: code, message: 'Compare this transfer code with the code in MailPort before importing.' });
-+    } catch {
-+      this.serialized = null;
-+      this.update({ transferCode: '', message: 'Could not read this transfer file.' });
-+    } finally {
-+      if (!this.alive && this.session) this.session.close();
-+      this.update({ busy: false });
-+    }
-+  };
-+
-+  private importAccounts = async () => {
-+    if (!this.session || !this.serialized) return;
-+    this.update({ busy: true, message: '' });
-+    try {
-+      const result = await this.session.importPackage({
-+        serialized: this.serialized,
-+        verifiedCode: this.state.transferCode,
-+        signal: this.abort.signal,
-+        adapter: this.adapter,
-+      });
-+      const saved = result.results.filter((item: any) => item.status === 'configured').length;
-+      const failed = result.results.length - saved;
-+      this.update({ completed: result.completed, message: `${saved} account(s) saved in the local profile. ${failed ? `${failed} could not be imported. Check for existing accounts or credentials, or retry after resolving the storage problem. ` : ''}Mail server connections have not been verified.` });
-+      if (result.completed) this.serialized = null;
-+    } catch {
-+      this.update({ message: 'The transfer could not be imported. Check the code and request expiry.' });
-+    } finally {
-+      if (!this.alive && this.session) this.session.close();
-+      this.update({ busy: false });
-+    }
-+  };
-+
-+  private finish = () => {
-+    if (this.wasFirstAccount) OnboardingActions.moveToPage('initial-preferences');
-+    else ipcRenderer.send('account-setup-successful');
-+  };
-+
-+  render() {
-+    const { requestCode, transferCode, message, busy, completed } = this.state;
-+    return (
-+      <div className="page account-setup">
-+        <h2>Import from MailPort</h2>
-+        <p>Preview: use synthetic accounts only. Password accounts are supported; provider sign-in must be set up separately.</p>
-+        {!requestCode && <button type="button" disabled={busy} onClick={this.start}>Create import request</button>}
-+        {!!requestCode && <p>Request code: <strong>{requestCode}</strong></p>}
-+        {!!requestCode && !completed && <button type="button" disabled={busy} onClick={this.choosePackage}>Open .mailport file</button>}
-+        {!!transferCode && !completed && <p>Transfer code: <strong>{transferCode}</strong></p>}
-+        {!!transferCode && !completed && <button type="button" disabled={busy} onClick={this.importAccounts}>Codes match · Import accounts</button>}
-+        {message && <p role="status">{message}</p>}
-+        {completed && <button type="button" onClick={this.finish}>Done</button>}
-+      </div>
-+    );
-+  }
-+}
-diff --git a/app/internal_packages/onboarding/specs/mailport-adapter.test.ts b/app/internal_packages/onboarding/specs/mailport-adapter.test.ts
-new file mode 100644
-index 0000000..95511e4
---- /dev/null
-+++ b/app/internal_packages/onboarding/specs/mailport-adapter.test.ts
-@@ -0,0 +1,42 @@
-+import assert from 'node:assert/strict';
-+import test from 'node:test';
-+import { createMailPortAdapter } from '../lib/mailport-adapter';
-+
-+const sample = () => ({
-+  email: 'sample@example.com',
-+  displayName: 'Sample',
-+  incoming: { host: 'imap.example.com', port: 993, username: 'in', security: 'tls', auth: { type: 'password', password: 'synthetic-in' } },
-+  outgoing: { host: 'smtp.example.com', port: 587, username: 'out', security: 'starttls', auth: { type: 'password', password: 'synthetic-out' } },
-+});
-+
-+test('maps both credentials and secure server settings to the save operation', async () => {
-+  const saved = [];
-+  const adapter = createMailPortAdapter({
-+    makeAccount: data => data,
-+    save: async account => { saved.push(account); },
-+    idForAccount: () => 'stable-id',
-+  });
-+  await adapter.upsertAccount(sample());
-+  assert.equal(saved.length, 1);
-+  assert.equal(saved[0].settings.imap_password, 'synthetic-in');
-+  assert.equal(saved[0].settings.smtp_password, 'synthetic-out');
-+  assert.equal(saved[0].settings.imap_security, 'SSL / TLS');
-+  assert.equal(saved[0].settings.smtp_security, 'STARTTLS');
-+  assert.equal(saved[0].settings.imap_allow_insecure_ssl, false);
-+  assert.equal(saved[0].settings.smtp_allow_insecure_ssl, false);
-+});
-+
-+test('refuses OAuth and propagates an acknowledged save failure', async () => {
-+  let attempts = 0;
-+  const adapter = createMailPortAdapter({
-+    makeAccount: data => data,
-+    save: async () => { attempts += 1; throw new Error('Synthetic write failed'); },
-+    idForAccount: () => 'stable-id',
-+  });
-+  const oauth = sample();
-+  oauth.incoming.auth.type = 'oauth';
-+  await assert.rejects(adapter.upsertAccount(oauth), /Provider sign-in/);
-+  assert.equal(attempts, 0);
-+  await assert.rejects(adapter.upsertAccount(sample()), /Synthetic write failed/);
-+  assert.equal(attempts, 1);
-+});
-diff --git a/app/src/compile-cache-ts.js b/app/src/compile-cache-ts.js
-index 68f58cf..1e28302 100644
---- a/app/src/compile-cache-ts.js
-+++ b/app/src/compile-cache-ts.js
-@@ -39,7 +39,24 @@ function writeCachedJavascript(relativeCachePath, code) {
-   const cachePath = path.join(cacheDirectory, relativeCachePath);
-   fs.mkdirSync(path.dirname(cacheTmpPath), { recursive: true });
-   fs.writeFileSync(cacheTmpPath, code, 'utf8');
--  fs.renameSync(cacheTmpPath, cachePath);
-+  try {
-+    fs.renameSync(cacheTmpPath, cachePath);
-+  } catch (error) {
-+    // Windows can lock the cache destination while another renderer reads it.
-+    // The preview can still use the JavaScript already compiled in memory.
-+    if (
-+      process.platform !== 'win32' ||
-+      process.env.MAILPORT_PREVIEW !== '1' ||
-+      !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)
-+    ) {
-+      throw error;
-+    }
-+    try {
-+      fs.unlinkSync(cacheTmpPath);
-+    } catch {
-+      // The disposable cache may still be locked.
-+    }
-+  }
- }
- 
- function addSourceURL(jsCode, filePath) {
 diff --git a/app/static/index.js b/app/static/index.js
-index b6ce24e..76f52f2 100644
+index b6ce24e..af8ea21 100644
 --- a/app/static/index.js
 +++ b/app/static/index.js
 @@ -82,6 +82,13 @@ function setupWindow(loadSettings) {
@@ -592,8 +400,8 @@ index b6ce24e..76f52f2 100644
  
 +  if (process.platform === 'win32' && loadSettings.devMode) {
 +    // Read only the preview flag. Windows renderers do not reliably inherit it.
-+    const preview = require('@electron/remote').process.env.MAILPORT_PREVIEW;
-+    if (preview === '1') process.env.MAILPORT_PREVIEW = '1';
++    const preview = require('@electron/remote').getGlobal('mailPortPreviewEnabled');
++    if (preview === true) process.env.MAILPORT_PREVIEW = '1';
 +    else delete process.env.MAILPORT_PREVIEW;
 +  }
 +

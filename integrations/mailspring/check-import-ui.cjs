@@ -24,8 +24,9 @@ const sample = {
   outgoing: { ...vector.outgoing, auth: { type: 'password', password: 'PUBLIC-SYNTHETIC-SMTP' } },
 };
 const another = { ...sample, id: '00000000-0000-4000-8000-000000000002', email: 'second-ui@example.com' };
-const env = { ...process.env, MAILPORT_PREVIEW: '1', PLAYWRIGHT: '1' };
+const env = { ...process.env, PLAYWRIGHT: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
+delete env.MAILPORT_PREVIEW;
 let attempt = 0;
 let app;
 const rendererErrors = [];
@@ -45,7 +46,7 @@ async function launch() {
   rendererErrors.length = 0;
   app = await _electron.launch({
     executablePath: mailspring('electron'),
-    args: [path.join(root, 'app'), '--dev', '--enable-logging', '--config-dir-path', profile],
+    args: [path.join(root, 'app'), '--dev', '--mailport-preview', '--enable-logging', '--config-dir-path', profile],
     env, timeout: 30000,
   });
   app.on('window', observeWindow);
@@ -57,6 +58,9 @@ async function launch() {
     }
     if (global.application.configPersistenceManager.configDirPath !== expectedProfile) {
       throw new Error('Unexpected profile');
+    }
+    if (global.mailPortPreviewEnabled !== true) {
+      throw new Error('Mailspring did not enable preview mode for the disposable profile');
     }
   }, profile);
 }
