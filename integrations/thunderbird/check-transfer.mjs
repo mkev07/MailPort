@@ -11,6 +11,8 @@ import { build } from "esbuild";
 
 const [executable, addon] = process.argv.slice(2);
 if (!executable) throw new Error("Pass the Thunderbird executable path.");
+const localMail = process.env.MAILPORT_LOCAL_MAIL ? JSON.parse(process.env.MAILPORT_LOCAL_MAIL) : undefined;
+if (localMail && !addon) throw new Error("Local mail validation requires the packaged add-on.");
 const root = new URL("../..", import.meta.url);
 const script = await readFile(new URL("./provision.js", import.meta.url), "utf8");
 const browserBuild = await build({
@@ -32,11 +34,11 @@ function syntheticAccount(number) {
     email: `synthetic-${number}@example.com`,
     displayName: `MailPort Test ${number} — Thunderbird`,
     incoming: {
-      host: "imap.example.test", port: 993, security: "tls", username: `imap-${number}`,
+      host: "imap.example.test", port: localMail?.imapPort ?? 993, security: "tls", username: `imap-${number}`,
       auth: { type: "password", password: `PUBLIC-SYNTHETIC-IMAP-${number}` },
     },
     outgoing: {
-      host: "smtp.example.test", port: 587, security: "starttls", username: `smtp-${number}`,
+      host: "smtp.example.test", port: localMail?.smtpPort ?? 587, security: "starttls", username: `smtp-${number}`,
       auth: { type: "password", password: `PUBLIC-SYNTHETIC-SMTP-${number}` },
     },
   };
@@ -337,6 +339,65 @@ async function smtpKeys(account) {
   return value;
 }
 
+async function checkLocalMail() {
+  const certificate = localMail.ca.replace(/-----[^-]+-----|\s/g, "");
+  await browserCommand(instance, `
+    const certificates = Cc["@mozilla.org/security/x509certdb;1"].getService(Ci.nsIX509CertDB);
+    certificates.addCertFromBase64(arguments[0], "CT,,");
+    Services.io.manageOfflineStatus = false;
+    Services.io.offline = false;
+    return null;
+  `, [certificate]);
+  for (const [index, sender] of accounts.entries()) {
+    const recipient = accounts[1 - index];
+    const subject = `MailPort authenticated loopback ${index + 1}`;
+    const messageId = `<mailport-loopback-${index + 1}@example.com>`;
+    const messageFile = join(profile, `loopback-${index + 1}.eml`);
+    await writeFile(messageFile, [
+      `From: ${sender.email}`,
+      `To: ${recipient.email}`,
+      `Subject: ${subject}`,
+      `Message-ID: ${messageId}`,
+      "",
+      "MailPort synthetic transfer and authenticated delivery.",
+      "",
+    ].join("\r\n"), { mode: 0o600 });
+    const smtpStatus = await browserCommand(instance, `
+      const [sender, recipient, messageFile, messageId] = arguments;
+      const { MailServices } = ChromeUtils.importESModule("resource:///modules/MailServices.sys.mjs");
+      const identity = MailServices.accounts.allIdentities.find(item => item.email === sender);
+      const service = MailServices.outgoingServer.getServerByKey(identity.smtpServerKey);
+      const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+      file.initWithPath(messageFile);
+      const address = MailServices.headerParser.makeMailboxObject("", recipient);
+      return await new Promise(resolve => {
+        service.sendMailMessage(file, [address], [], identity, sender, "", null, false, messageId, {
+          onSendStart() {},
+          onSendStop(_uri, status) { resolve(status); },
+        });
+      });
+    `, [sender.email, recipient.email, messageFile, messageId]);
+    assert.equal(smtpStatus, 0, "Thunderbird SMTP delivery failed");
+    const received = await browserCommand(instance, `
+      const [recipient, subject] = arguments;
+      const { MailServices } = ChromeUtils.importESModule("resource:///modules/MailServices.sys.mjs");
+      const server = MailServices.accounts.accounts.find(item => item.defaultIdentity?.email === recipient)
+        .incomingServer;
+      const folder = server.rootMsgFolder.getFolderWithFlags(Ci.nsMsgFolderFlags.Inbox);
+      const status = await new Promise(resolve => {
+        server.getNewMessages(folder, null, {
+          OnStartRunningUrl() {},
+          OnStopRunningUrl(_url, result) { resolve(result); },
+        });
+      });
+      return { status, found: [...folder.messages].some(message => message.subject === subject) };
+    `, [recipient.email, subject]);
+    assert.deepEqual(received, { status: 0, found: true }, "Thunderbird could not retrieve the delivered IMAP message");
+  }
+  await assertEncrypted(4);
+  console.log("Both imported Thunderbird accounts sent through SMTP STARTTLS and received through IMAP TLS using saved credentials.");
+}
+
 async function checkAddon(version) {
   const id = "mailport-preview@mailport.invalid";
   const { value: installed } = await instance.command("Addon:Install", {
@@ -446,6 +507,7 @@ async function checkAddon(version) {
   for (const account of accounts) assert.equal(await provision(account, true), "match");
   await assertEncrypted(4);
   console.log(`Thunderbird ${version}: installed the XPI, checked the confirmation, saved two accounts, and verified both after restart.`);
+  if (localMail) await checkLocalMail();
 }
 
 async function checkRecovery(version) {
@@ -579,6 +641,11 @@ try {
     'user_pref("browser.download.folderList", 2);',
     'user_pref("browser.download.useDownloadDir", true);',
     `user_pref("browser.download.dir", ${JSON.stringify(profile)});`,
+    ...(localMail ? [
+      'user_pref("network.dns.localDomains", "imap.example.test,smtp.example.test");',
+      'user_pref("network.trr.mode", 5);',
+      'user_pref("network.dns.disableIPv6", true);',
+    ] : []),
   ].join("\n"));
   const version = await start();
   if (addon) await checkAddon(version);

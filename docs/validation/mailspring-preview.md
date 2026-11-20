@@ -45,5 +45,25 @@ the committed account. On Windows the preview waits for Chromium to write its
 DPAPI-wrapped key before saving new encrypted credentials.
 [Windows CI log](https://github.com/mkev07/MailPort/actions/runs/44730472305/job/136268617999)
 
-These tests simulate process termination. Power loss, live mailbox connectivity,
-OAuth, distribution and independent security review remain unverified.
+## Send and receive with controlled servers
+
+The Mailspring preview on Debian 13 ARM64 imported two synthetic accounts,
+restarted, and passed Mailsync's native IMAP and SMTP account check using
+their saved credentials. The local SMTP fixture delivered a test message
+from each account and Mailspring synced both messages sent earlier by
+Thunderbird into the matching inbox database. The endpoints enforced IMAP
+TLS and SMTP STARTTLS. The test CA was trusted inside the disposable Linux
+container. The macOS engine rejected the fixture certificate when its CA
+was absent from the system trust store.
+
+Build the prepared Linux client from the committed preview, then pass that
+image as the second argument to the [local mail harness](thunderbird-feasibility.md#send-and-receive-with-controlled-servers).
+
+```sh
+git archive HEAD | docker build -f integrations/mailspring/Dockerfile.local-mail \
+  -t mailport-msp-fixture:local -
+node integrations/thunderbird/local-mail/run.mjs /path/to/Thunderbird mailport-msp-fixture:local
+```
+
+Power loss, live provider compatibility, OAuth, distribution and independent
+security review remain unverified.

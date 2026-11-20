@@ -92,6 +92,30 @@ lookup, which is available on both versions.
   accounts saved after the correct code, and all four credentials were read
   back after a restart.
 
+## Send and receive with controlled servers
+
+The Thunderbird ESR add-on also passed a local mail exchange on macOS.
+After importing and restarting, each account sent a message to the other
+over SMTP STARTTLS and fetched its incoming message over IMAP TLS.
+Thunderbird used the saved logins after restart. The fixture requires TLS
+and uses distinct usernames and passwords for IMAP and SMTP.
+
+The harness uses Docker, OpenSSL, and an already built browser SDK.
+It creates a short-lived test CA and trusts it only in the disposable
+Thunderbird profile. Docker publishes both mail ports on loopback. The
+fixture accepts delivery only to its two synthetic mailboxes.
+
+```sh
+npm run build --workspace @mailport/sdk
+node integrations/thunderbird/local-mail/run.mjs /path/to/Thunderbird
+```
+
+The optional second argument runs the [Mailspring checks](mailspring-preview.md)
+against the same fixture. This covers local protocol behavior. Live provider
+compatibility and OAuth sign-in need separate validation.
+
+## Recovery details
+
 - The two-account batch survived process termination between accounts. A new
   transfer skipped the first saved account and created the second. After a
   further restart, both IMAP and SMTP credentials matched through the
