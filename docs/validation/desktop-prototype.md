@@ -73,6 +73,15 @@ under Xvfb and D-Bus with a fresh profile.
   displayed package code and decoded exactly the two selected accounts,
   preserving the IMAP and SMTP credentials and pending OAuth sign-in.
 
+## Native AppImage mount
+
+The `d8947e6` AppImage from CI mounted with FUSE on a native Ubuntu 24.04
+amd64 host. The kernel mount table confirmed the active mount, and the
+mounted image contained the launcher and Vault executable. The headless
+host lacked EGL libraries. Staging those libraries resolved the missing
+dependencies, but EGL and GTK initialization still failed under Xvfb before
+the app opened a window. Interactive acceptance remains open.
+
 ## Remaining acceptance
 
 Use a disposable macOS user account or VM to launch the signed Vault, create
