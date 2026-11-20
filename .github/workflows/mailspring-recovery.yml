@@ -3,6 +3,7 @@ name: Mailspring recovery
 on:
   pull_request:
     paths:
+      - '.gitattributes'
       - '.github/workflows/mailspring-recovery.yml'
       - 'integrations/mailspring/**'
       - 'docs/vectors/**'
@@ -37,6 +38,7 @@ jobs:
       - name: Prepare preview and synthetic sender
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           git config --global url.https://github.com/.insteadOf ssh://git@github.com/
           git config --global --add url.https://github.com/.insteadOf git@github.com:
           $checkout = Join-Path $env:RUNNER_TEMP 'mailspring-preview'
@@ -50,9 +52,14 @@ jobs:
       - name: Install Mailspring and its sync engine
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           Set-Location (Join-Path $env:RUNNER_TEMP 'mailspring-preview')
           npx --yes --package npm@10.9.8 -c 'npm ci --no-audit'
           if (!(Test-Path 'app/mailsync.exe')) { throw 'Mailspring did not install its sync engine' }
+          if (!(Test-Path 'app/internal_packages/onboarding/lib/page-mailport-import.tsx') -or
+              !(Test-Path 'app/internal_packages/onboarding/lib/mailport-sdk.cjs')) {
+            throw 'The MailPort preview importer or SDK bundle is missing'
+          }
       - name: Run synthetic UI recovery scenarios
         shell: pwsh
         run: |

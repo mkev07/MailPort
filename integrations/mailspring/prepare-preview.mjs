@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { constants, copyFileSync, existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,10 +15,11 @@ const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: checkout, encodin
 if (head !== expected) throw new Error(`Expected Mailspring commit ${expected}; found ${head}.`);
 const status = execFileSync('git', ['status', '--porcelain'], { cwd: checkout, encoding: 'utf8' });
 if (status.trim()) throw new Error('The Mailspring checkout must be clean.');
-const patch = join(here, 'preview.patch');
+const patch = readFileSync(join(here, 'preview.patch'), 'utf8').replace(/\r\n/g, '\n');
+const applyOptions = { cwd: checkout, input: patch, stdio: ['pipe', 'inherit', 'inherit'] };
 const bundle = join(checkout, 'app/internal_packages/onboarding/lib/mailport-sdk.cjs');
 if (existsSync(bundle)) throw new Error('The preview bundle already exists in the checkout.');
-execFileSync('git', ['apply', '--check', patch], { cwd: checkout, stdio: 'inherit' });
+execFileSync('git', ['apply', '--check', '-'], applyOptions);
 const temp = mkdtempSync(join(tmpdir(), 'mailport-preview-'));
 try {
   const stagedBundle = join(temp, 'mailport-sdk.cjs');
@@ -31,7 +32,7 @@ try {
     target: 'node22',
     outfile: stagedBundle,
   });
-  execFileSync('git', ['apply', patch], { cwd: checkout, stdio: 'inherit' });
+  execFileSync('git', ['apply', '-'], applyOptions);
   copyFileSync(stagedBundle, bundle, constants.COPYFILE_EXCL);
 } finally {
   rmSync(temp, { recursive: true, force: true });

@@ -10,6 +10,8 @@ attribution before distributing it.
 
 Install MailPort's dependencies with `npm ci`. Obtain a separate, clean
 Mailspring checkout at commit `0635d327398c8d97255660ae7b0011bf1e3fe4df`.
+On Windows, set `core.autocrlf=false` for the Mailspring checkout before
+checking out that commit so the patch can match the upstream LF source.
 Include `mailspring` in the checkout directory name. The upstream prebuilt
 Mailsync executable checks its path and exits with code 2 if the name is
 missing. Then run from the MailPort root:
