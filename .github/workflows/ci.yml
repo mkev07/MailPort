@@ -73,7 +73,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb xauth
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb xauth dbus-x11
       - run: npm ci
       - run: npm run vault:build -- ${{ matrix.args }}
       - run: cargo test --locked -p mailport --lib
@@ -87,11 +87,32 @@ jobs:
           done
           test -x "$RUNNER_TEMP/mailport-deb/usr/bin/MailPort"
           launch() {
-            local package="$1" data="$2" status=0
-            XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$data/config" \
-              timeout 12s xvfb-run -a "$package" || status=$?
-            test "$status" -eq 124
-            test -d "$data/org.mailport.vault"
+            local package="$1" data="$2"
+            mkdir -p "$data/config"
+            echo "Launching $package"
+            XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$data/config" xvfb-run -a dbus-run-session -- \
+              bash -euc '
+                "$1" &
+                pid=$!
+                trap "kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true" EXIT
+                for ((attempt = 0; attempt < 30; attempt++)); do
+                  if ! kill -0 "$pid" 2>/dev/null; then
+                    status=0
+                    wait "$pid" || status=$?
+                    echo "MailPort exited before startup verification (exit $status)" >&2
+                    exit 1
+                  fi
+                  if test -d "$XDG_DATA_HOME/org.mailport.vault"; then
+                    sleep 2
+                    kill -0 "$pid"
+                    echo "MailPort initialized the isolated profile and stayed running"
+                    exit 0
+                  fi
+                  sleep 1
+                done
+                echo "MailPort did not initialize its isolated profile" >&2
+                exit 1
+              ' bash "$package"
           }
           launch "$RUNNER_TEMP/mailport-deb/usr/bin/MailPort" "$RUNNER_TEMP/mailport-deb-profile"
           for package in target/debug/bundle/appimage/*.AppImage; do
