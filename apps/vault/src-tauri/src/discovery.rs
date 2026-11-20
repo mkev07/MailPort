@@ -1,4 +1,4 @@
-use hickory_resolver::{config::ResolverOpts, system_conf::read_system_conf, TokioAsyncResolver};
+use hickory_resolver::{config::ResolverOpts, proto::rr::RData, TokioResolver};
 use serde::Serialize;
 use std::time::Duration;
 
@@ -94,7 +94,7 @@ fn preset(domain: &str) -> Option<Discovery> {
 }
 
 async fn lookup(
-    resolver: &TokioAsyncResolver,
+    resolver: &TokioResolver,
     service: &str,
     domain: &str,
     security: &'static str,
@@ -104,17 +104,21 @@ async fn lookup(
         .await
         .ok()?;
     records
+        .answers()
         .iter()
         .filter_map(|record| {
-            let target = record.target().to_ascii();
+            let RData::SRV(record) = &record.data else {
+                return None;
+            };
+            let target = record.target.to_ascii();
             let host = target.trim_end_matches('.');
-            (record.port() > 0 && valid_domain(host)).then(|| {
+            (record.port > 0 && valid_domain(host)).then(|| {
                 (
-                    record.priority(),
-                    record.weight(),
+                    record.priority,
+                    record.weight,
                     Endpoint {
                         host: host.to_owned(),
-                        port: record.port(),
+                        port: record.port,
                         security,
                     },
                 )
@@ -199,11 +203,15 @@ fn hosted_settings(records: &[(u16, String)]) -> Option<Discovery> {
     })
 }
 
-async fn lookup_mx(resolver: &TokioAsyncResolver, domain: &str) -> Option<Discovery> {
+async fn lookup_mx(resolver: &TokioResolver, domain: &str) -> Option<Discovery> {
     let records = resolver.mx_lookup(format!("{domain}.")).await.ok()?;
     let targets: Vec<_> = records
+        .answers()
         .iter()
-        .map(|record| (record.preference(), record.exchange().to_ascii()))
+        .filter_map(|record| match &record.data {
+            RData::MX(record) => Some((record.preference, record.exchange.to_ascii())),
+            _ => None,
+        })
         .collect();
     hosted_settings(&targets)
 }
@@ -332,11 +340,15 @@ pub async fn discover_mail_servers(domain: String) -> Result<Discovery, String> 
     if let Some(result) = preset(&domain) {
         return Ok(result);
     }
-    let (config, _) = read_system_conf().map_err(|_| "The system DNS resolver is unavailable.")?;
+    let mut builder =
+        TokioResolver::builder_tokio().map_err(|_| "The system DNS resolver is unavailable.")?;
     let mut options = ResolverOpts::default();
     options.timeout = Duration::from_secs(2);
     options.attempts = 1;
-    let resolver = TokioAsyncResolver::tokio(config, options);
+    *builder.options_mut() = options;
+    let resolver = builder
+        .build()
+        .map_err(|_| "The system DNS resolver is unavailable.")?;
     let (imaps, imap, submissions, submission, hosted) = tokio::join!(
         lookup(&resolver, "_imaps", &domain, "tls"),
         lookup(&resolver, "_imap", &domain, "starttls"),
@@ -376,6 +388,70 @@ pub async fn discover_mail_servers(domain: String) -> Result<Discovery, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn resolver_reads_srv_and_mx_answers_over_loopback() {
+        use hickory_resolver::{
+            config::{ConnectionConfig, NameServerConfig, ResolverConfig},
+            net::runtime::TokioRuntimeProvider,
+            proto::{
+                op::{Message, OpCode},
+                rr::{
+                    rdata::{MX, SRV},
+                    Record, RecordType,
+                },
+            },
+        };
+        use tokio::net::UdpSocket;
+
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = socket.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut buffer = [0; 4096];
+            for _ in 0..2 {
+                let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+                let request = Message::from_vec(&buffer[..len]).unwrap();
+                let query = &request.queries[0];
+                let data = match query.query_type {
+                    RecordType::SRV => {
+                        RData::SRV(SRV::new(0, 0, 993, "imap.example.test.".parse().unwrap()))
+                    }
+                    RecordType::MX => {
+                        RData::MX(MX::new(10, "safari.mxrouting.net.".parse().unwrap()))
+                    }
+                    _ => panic!("unexpected fixture query"),
+                };
+                let mut reply = Message::response(request.metadata.id, OpCode::Query);
+                reply.metadata.recursion_available = true;
+                reply.add_query(query.clone());
+                reply.add_answer(Record::from_rdata(query.name.clone(), 60, data));
+                socket
+                    .send_to(&reply.to_vec().unwrap(), peer)
+                    .await
+                    .unwrap();
+            }
+        });
+        let mut connection = ConnectionConfig::udp();
+        connection.port = address.port();
+        let config = ResolverConfig::from_name_servers(vec![NameServerConfig::new(
+            address.ip(),
+            true,
+            vec![connection],
+        )]);
+        let resolver = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
+            .build()
+            .unwrap();
+        let endpoint = lookup(&resolver, "_imaps", "example.test", "tls")
+            .await
+            .unwrap();
+        assert_eq!(
+            (endpoint.host.as_str(), endpoint.port),
+            ("imap.example.test", 993)
+        );
+        let mx = lookup_mx(&resolver, "example.test").await.unwrap();
+        assert_eq!(mx.incoming.unwrap().host, "safari.mxrouting.net");
+        server.await.unwrap();
+    }
 
     #[test]
     fn recognizes_mxroute_primary_without_using_an_unrelated_mx_as_a_client_host() {
