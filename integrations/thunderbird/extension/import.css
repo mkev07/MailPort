@@ -1,0 +1,37 @@
+@font-face {
+  font-family: Allo;
+  src: url("AlloVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Paper Mono;
+  src: url("PaperMono.woff2") format("woff2");
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light dark;
+  font: 16px/1.5 Allo, system-ui, sans-serif;
+  color: CanvasText;
+  background: Canvas;
+}
+
+body { margin: 0; }
+main { max-width: 36rem; margin: clamp(1rem, 6vw, 4rem) auto; padding: 0 1.125rem; }
+h1 { font-size: 1.8rem; line-height: 1.2; margin: 0; }
+h2 { font-size: 1.1rem; margin: 0; }
+p { margin: .6rem 0; }
+section { padding: 1.25rem 0; border-top: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); }
+header { margin-bottom: 1.25rem; }
+fieldset { min-inline-size: 0; padding: 0; margin: .6rem 0 0; border: 0; }
+label { display: block; margin-bottom: .35rem; }
+input, button { font: inherit; max-width: 100%; }
+input[type="text"] { box-sizing: border-box; width: 16em; padding: .3rem .45rem; }
+button { padding: .3rem .65rem; }
+output, #verified-code { font-family: Paper Mono, monospace; }
+output { margin-inline-start: .35rem; user-select: all; }
+a { color: LinkText; }
+:focus-visible { outline: 2px solid AccentColor; outline-offset: 3px; }
+#status { min-height: 1.5em; margin-top: 0; }

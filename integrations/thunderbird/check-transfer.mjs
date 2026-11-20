@@ -4,12 +4,12 @@ import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
-const executable = process.argv[2];
+const [executable, addon] = process.argv.slice(2);
 if (!executable) throw new Error("Pass the Thunderbird executable path.");
 const root = new URL("../..", import.meta.url);
 const script = await readFile(new URL("./provision.js", import.meta.url), "utf8");
@@ -337,14 +337,118 @@ async function smtpKeys(account) {
   return value;
 }
 
-try {
-  await writeFile(join(profile, "user.js"), [
-    'user_pref("marionette.port", 0);',
-    'user_pref("mail.shell.checkDefaultClient", false);',
-    'user_pref("mail.provider.enabled", false);',
-    'user_pref("mailnews.start_page.enabled", false);',
-  ].join("\n"));
-  const version = await start();
+async function checkAddon(version) {
+  const id = "mailport-preview@mailport.invalid";
+  const { value: installed } = await instance.command("Addon:Install", {
+    path: resolve(addon), temporary: true,
+  });
+  assert.equal(installed, id);
+  await browserCommand(instance, `
+    const tabmail = document.getElementById("tabmail");
+    const setup = tabmail.tabInfo.find(tab => tab.browser?.currentURI?.spec === "about:accountsetup");
+    if (setup) tabmail.closeTab(setup);
+    tabmail.switchToTab(0);
+    return null;
+  `);
+
+  async function loadPage(enable) {
+    const url = await browserCommand(instance, `
+      Services.prefs.setBoolPref("mailport.preview.enabled", arguments[1]);
+      const policy = WebExtensionPolicy.getByID(arguments[0]);
+      const tabmail = document.getElementById("tabmail");
+      if (globalThis.mailPortAddonTab) tabmail.closeTab(globalThis.mailPortAddonTab);
+      return policy.getURL("import.html");
+    `, [id, enable]);
+    await waitFor(() => browserCommand(instance, `
+      const action = document.querySelector("#unifiedToolbarContent [extension='" + arguments[0] + "']");
+      if (!action || action.disabled) return false;
+      Services.focus.focusedWindow = window;
+      action.focus();
+      action.click();
+      return true;
+    `, [id]), "the MailPort toolbar action");
+    await waitFor(() => browserCommand(instance, `
+      const tab = document.getElementById("tabmail").tabInfo.find(item =>
+        item.browser?.currentURI?.spec === arguments[0]);
+      if (!tab || tab.browser.webProgress.isLoadingDocument) return false;
+      globalThis.mailPortAddonTab = tab;
+      return true;
+    `, [url]), "the MailPort extension tab");
+  }
+
+  // Gecko's Marionette tab enumeration is Firefox-specific. Target the
+  // Thunderbird tab's own WebDriver actor to exercise the actual extension page.
+  function runPage(script, args = []) {
+    return browserCommand(instance, `
+      const [script, args] = arguments;
+      const window = globalThis.mailPortAddonTab.browser.browsingContext.currentWindowGlobal;
+      return window.getActor("MarionetteCommands").executeScript(script, args, {
+        sandboxName: null, newSandbox: false, async: false, timeout: 5000,
+      });
+    `, [script, args]);
+  }
+
+  async function statusIncludes(text) {
+    await waitFor(() => runPage(
+      "return document.querySelector('#status')?.textContent.includes(arguments[0]) === true;",
+      [text],
+    ), "the expected importer status");
+  }
+
+  await loadPage(false);
+  await statusIncludes("Use an offline profile");
+  assert.equal(await runPage("return document.querySelector('#create-request').disabled;"), true);
+
+  await loadPage(true);
+  await waitFor(() => runPage("return document.querySelector('#create-request')?.disabled === false;"),
+    "the request button");
+  await runPage("document.querySelector('#create-request').click();");
+  await statusIncludes("Request ready");
+  const requestCode = await runPage(`document.querySelector("#save-request").click();
+    return document.querySelector("#request-code").textContent;`);
+  const requestFile = await waitFor(async () => {
+    const saved = await readIfPresent(join(profile, "Thunderbird.mailport-request"));
+    if (saved.endsWith("}")) return saved;
+  }, "the downloaded request file");
+  const sealed = JSON.parse(execFileSync(sender, ["seal-transfer"], {
+    input: JSON.stringify({ requestFile, accounts, ids: accounts.map(account => account.id) }),
+    encoding: "utf8", timeout: 30000, stdio: ["pipe", "pipe", "ignore"],
+  }));
+  assert.equal(requestCode, sealed.verificationCode);
+
+  const transferPath = join(profile, "test.mailport");
+  await writeFile(transferPath, sealed.package, { mode: 0o600 });
+  await runPage(`const file = new File([arguments[0]], "test.mailport");
+    const input = document.querySelector("#transfer-file");
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));`, [await readFile(transferPath, "utf8")]);
+  await statusIncludes("Compare the transfer code");
+  assert.equal(await runPage("return document.querySelector('#transfer-code').textContent;"), sealed.packageCode);
+
+  async function enterCode(code) {
+    await runPage(`document.querySelector("#verified-code").value = arguments[0];
+      document.querySelector("#import-accounts").click();`, [code]);
+  }
+
+  const wrong = (sealed.packageCode[0] === "0" ? "1" : "0") + sealed.packageCode.slice(1);
+  await enterCode(wrong);
+  await statusIncludes("The codes do not match");
+  assert.ok(!(await readIfPresent(join(profile, "logins.json"))).includes("imap.example.test"));
+
+  await enterCode(sealed.packageCode);
+  await statusIncludes("Saved 2 of 2 accounts in Thunderbird");
+  await assertEncrypted(4);
+  await instance.command("Marionette:SetContext", { value: "chrome" });
+  await stop();
+  await start();
+  for (const account of accounts) assert.equal(await provision(account, true), "match");
+  await assertEncrypted(4);
+  console.log(`Thunderbird ${version}: installed the XPI, checked the confirmation, saved two accounts, and verified both after restart.`);
+}
+
+async function checkRecovery(version) {
   assert.deepEqual(await transfer(accounts, { stopAfterFirst: true }), {
     statuses: ["configured", "cancelled"], observed: ["created"],
   });
@@ -464,6 +568,21 @@ try {
   for (const account of [...accounts, interrupted]) assert.equal(await provision(account, true), "match");
 
   console.log(`Thunderbird ${version}: recovered interrupted credential and account writes without duplicating accounts or SMTP servers.`);
+}
+
+try {
+  await writeFile(join(profile, "user.js"), [
+    'user_pref("marionette.port", 0);',
+    'user_pref("mail.shell.checkDefaultClient", false);',
+    'user_pref("mail.provider.enabled", false);',
+    'user_pref("mailnews.start_page.enabled", false);',
+    'user_pref("browser.download.folderList", 2);',
+    'user_pref("browser.download.useDownloadDir", true);',
+    `user_pref("browser.download.dir", ${JSON.stringify(profile)});`,
+  ].join("\n"));
+  const version = await start();
+  if (addon) await checkAddon(version);
+  else await checkRecovery(version);
 } finally {
   try {
     await stop();

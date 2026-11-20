@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Import from MailPort</title>
+  <link rel="stylesheet" href="import.css">
+  <script type="module" src="import.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Import from MailPort</h1>
+      <p>This preview works offline with synthetic accounts in a Thunderbird test profile.</p>
+    </header>
+
+    <section aria-labelledby="request-heading">
+      <h2 id="request-heading">Create an import request</h2>
+      <p>Open the request in MailPort Vault and compare the request codes before exporting.</p>
+      <button id="create-request" disabled>Create request</button>
+      <div id="request-details" hidden>
+        <p>Request code <output id="request-code"></output></p>
+        <a id="save-request" download="Thunderbird.mailport-request">Save request file</a>
+      </div>
+    </section>
+
+    <section aria-labelledby="transfer-heading">
+      <h2 id="transfer-heading">Open a transfer</h2>
+      <fieldset id="transfer-controls" disabled>
+        <label for="transfer-file">MailPort transfer file</label>
+        <input id="transfer-file" type="file" accept=".mailport">
+        <form id="approval" hidden>
+          <p>Transfer code <output id="transfer-code"></output></p>
+          <label for="verified-code">Enter the transfer code shown in MailPort Vault</label>
+          <input id="verified-code" type="text" autocomplete="off" spellcheck="false" maxlength="19" required>
+          <p>Thunderbird will save the accounts and their passwords locally.</p>
+          <button id="import-accounts" type="submit">Import accounts</button>
+        </form>
+      </fieldset>
+    </section>
+    <p id="status" role="status" aria-live="polite">Checking the test profile…</p>
+  </main>
+</body>
+</html>

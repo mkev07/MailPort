@@ -94,15 +94,14 @@ async function provision(account, inspectOnly) {
 
   async function waitForSavedLogins() {
     const store = PathUtils.join(PathUtils.profileDir, "logins.json");
-    const deadline = performance.now() + 10000;
-    do {
+    for (let attempt = 0; attempt < 100; attempt++) {
       const persisted = await IOUtils.readJSON(store).catch(error => {
         if (error.name === "NotFoundError") return { logins: [] };
         throw error;
       });
       if (journal.guids.every(guid => persisted.logins.some(login => login.guid === guid))) return;
       await new Promise(resolve => setTimeout(resolve, 100));
-    } while (performance.now() < deadline);
+    }
     throw new Error("Thunderbird login store did not persist the imported credentials");
   }
 

@@ -41,14 +41,56 @@ Rust sender and returns the encrypted `.mailport` package over its privileged
 loopback Marionette interface. The browser SDK verifies both comparison codes
 programmatically and decrypts inside Thunderbird. The harness checks that a
 wrong code prevents any account writes. Thunderbird creates the accounts using
-its native setup backend. The harness removes the profile on exit. A
-user-facing importer and an extension package remain future work.
+its native setup backend. The harness removes the profile on exit.
+
+## Build and run the temporary add-on
+
+Build the SDK and package the extension from a repository checkout with
+`zip` available. The package is written to
+`dist/thunderbird/mailport-preview.xpi`.
+
+```sh
+npm run build --workspace @mailport/sdk
+node integrations/thunderbird/build-extension.mjs
+```
+
+Use a new Thunderbird profile, start it offline, and set the boolean
+preference `mailport.preview.enabled` to `true` in that profile. Load the
+XPI through **Debug Add-ons** as a temporary add-on. This is a Thunderbird
+Experiment with privileged access. Keep it in the disposable profile.
+Use synthetic password accounts with an `@example.com` address,
+`imap.example.test` as the incoming hostname and `smtp.example.test` as
+the outgoing hostname.
+[Thunderbird temporary installation guide](https://developer.thunderbird.net/add-ons/hello-world-add-on)
+
+Close Thunderbird's first-run account setup tab if it is open, then choose
+**Import from MailPort** from the toolbar. Create and
+save a request, open it in MailPort Vault, and compare the request codes
+before exporting. Select the exported transfer in Thunderbird and type
+the transfer code displayed by MailPort Vault. The tab keeps the request
+in memory for up to 15 minutes. If interrupted, create another request
+and export the same accounts again.
+
+To exercise the packaged add-on in a disposable offline profile, pass
+the XPI as the second argument to the harness.
+
+```sh
+node integrations/thunderbird/check-transfer.mjs \
+  /Applications/Thunderbird.app/Contents/MacOS/thunderbird \
+  dist/thunderbird/mailport-preview.xpi
+```
 
 ## Observed behavior on macOS
 
 The recovery harness passed on Thunderbird 138.0.1 and the official
 153.7.0 ESR macOS build. The preview uses Thunderbird's asynchronous login
 lookup, which is available on both versions.
+
+- The temporary XPI opened its import tab, disabled the flow on a profile
+  with the preview preference off, and presented both verification codes.
+  A wrong confirmation code left the login store untouched. Two synthetic
+  accounts saved after the correct code, and all four credentials were read
+  back after a restart.
 
 - The two-account batch survived process termination between accounts. A new
   transfer skipped the first saved account and created the second. After a
@@ -89,7 +131,6 @@ The request and transfer codes still need explicit user confirmation in the
 importer. Meanwhile, keep the privileged integration as a disposable-profile
 test for the file protocol and account recovery.
 
-An Experiment can exercise packaging earlier in a controlled preview. A
-public release would require accepting its unrestricted permission prompt
-and reviewing how the add-on keeps credentials and operations within the
-import flow across Thunderbird releases.
+The temporary XPI exercises Experiment packaging. A public release would
+require reviewing its unrestricted permission prompt, credential boundary,
+and compatibility across Thunderbird releases.
