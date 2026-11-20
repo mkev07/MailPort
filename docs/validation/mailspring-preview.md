@@ -60,10 +60,15 @@ for an OAuth account, and recovery without duplication after the process
 stopped following a committed write. The setup script still uses the earlier
 baseline, which has broader recovery coverage.
 
-The next macOS check uses two dedicated test mailboxes in a fresh preview
-profile. Import both in one transfer, restart Mailspring, and verify that each
-mailbox can send a message and receive a reply. Record outcomes without
-including mailbox addresses, credentials, or message content.
+### Live mail on macOS
+
+On 2026-11-20, the project owner tested two MailPort-imported accounts in
+the isolated Mailspring 2.0 preview on macOS. Mailspring synced existing mail
+and received a new message sent from an external mailbox to both accounts.
+The owner replied from each account in Mailspring and confirmed both replies
+arrived in the external mailbox. This verifies live incoming and outgoing mail
+for the two tested configurations. Restart persistence with these live accounts
+was not reported.
 
 ## Send and receive with controlled servers
 
@@ -85,5 +90,5 @@ git archive HEAD | docker build -f integrations/mailspring/Dockerfile.local-mail
 node integrations/thunderbird/local-mail/run.mjs /path/to/Thunderbird mailport-msp-fixture:local
 ```
 
-Power loss, live provider compatibility, OAuth, distribution and independent
-security review remain unverified.
+Power loss, broader live provider compatibility, live OAuth sign-in,
+distribution and independent security review remain unverified.
