@@ -1,6 +1,7 @@
 # macOS release candidate
 
-The Apple Silicon candidate built from `50b273d` passed Apple notarization.
+The Apple Silicon candidate built from `476efbc` passed Apple notarization.
+This build includes the updated DNS resolver, Tokio, and rustix.
 The archived app was extracted into a fresh directory and passed strict
 signature verification, stapled-ticket validation, and Gatekeeper assessment
 as a notarized Developer ID app. The ZIP and its SHA-256 digest were generated

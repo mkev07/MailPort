@@ -73,12 +73,12 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb xauth
       - run: npm ci
       - run: npm run vault:build -- ${{ matrix.args }}
       - run: cargo test --locked -p mailport --lib
       - if: runner.os == 'Linux'
-        name: Check Linux package contents
+        name: Launch Linux preview packages
         shell: bash
         run: |
           for package in target/debug/bundle/deb/*.deb; do
@@ -86,9 +86,38 @@ jobs:
             dpkg-deb --extract "$package" "$RUNNER_TEMP/mailport-deb"
           done
           test -x "$RUNNER_TEMP/mailport-deb/usr/bin/MailPort"
+          launch() {
+            local package="$1" data="$2" status=0
+            XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$data/config" \
+              timeout 12s xvfb-run -a "$package" || status=$?
+            test "$status" -eq 124
+            test -d "$data/org.mailport.vault"
+          }
+          launch "$RUNNER_TEMP/mailport-deb/usr/bin/MailPort" "$RUNNER_TEMP/mailport-deb-profile"
           for package in target/debug/bundle/appimage/*.AppImage; do
-            test -x "$package"
+            launch "$(realpath "$package")" "$RUNNER_TEMP/mailport-appimage-profile"
           done
+      - if: runner.os == 'Windows'
+        name: Install and launch the Windows preview
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target/debug/bundle/nsis -Filter '*-setup.exe' | Select-Object -First 1
+          if (!$installer) { throw 'MailPort installer is missing' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'mailport-installed'
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "MailPort setup exited with $($setup.ExitCode)" }
+          $app = Start-Process -FilePath (Join-Path $installDir 'MailPort.exe') -PassThru
+          try {
+            for ($i = 0; $i -lt 30; $i++) {
+              $app.Refresh()
+              if ($app.HasExited) { throw "MailPort exited with $($app.ExitCode)" }
+              if ($app.MainWindowHandle -ne [IntPtr]::Zero) { break }
+              Start-Sleep -Seconds 1
+            }
+            if ($app.MainWindowHandle -eq [IntPtr]::Zero) { throw 'MailPort did not open a window' }
+          } finally {
+            if (!$app.HasExited) { Stop-Process -Id $app.Id }
+          }
       - if: matrix.artifact && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
         uses: actions/upload-artifact@v4
         with:
