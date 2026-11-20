@@ -25,6 +25,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node build-browser.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "test": "tsx --test test/import.test.ts test/vault.test.ts test/transfer.test.ts",
     "demo": "tsx examples/roundtrip.ts",

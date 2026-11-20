@@ -26,6 +26,11 @@ describes the wire format and retry behavior; the
 [security model](https://github.com/mkev07/MailPort/blob/main/docs/security.md)
 describes host obligations and release gates.
 
+To try the SDK in a separate project, run `npm pack --workspace @mailport/sdk`
+from the repository root after `npm ci`. Packing builds both entry points.
+Install the resulting tarball in the receiving project's directory with
+`npm install /path/to/mailport-sdk-0.1.0.tgz`.
+
 The package has not received independent security review. The SDK does not
 prove that a provider accepted credentials or that a receiving client stored
 them durably. OAuth accounts must complete the receiving client's own sign-in.
