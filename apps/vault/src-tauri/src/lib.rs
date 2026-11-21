@@ -6,13 +6,13 @@ use tauri::{
 mod avatar_cache;
 #[cfg(target_os = "macos")]
 mod direct_import;
-#[cfg(target_os = "macos")]
-mod receiver_identity;
 mod discovery;
 #[cfg(target_os = "macos")]
 mod macos;
 mod profiles;
 mod quick_unlock;
+#[cfg(target_os = "macos")]
+mod receiver_identity;
 mod vault;
 #[cfg(target_os = "macos")]
 mod vault_lifecycle;

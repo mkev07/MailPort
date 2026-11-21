@@ -49,6 +49,8 @@
     "resources": {
       "../../../LICENSE": "licenses/MailPort-MIT.txt",
       "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "../licenses/Allo-OFL.txt": "licenses/Allo-OFL.txt",
+      "../licenses/sonner.txt": "licenses/sonner.txt",
       "../licenses/Gravatar-GPL-2.0.txt": "licenses/Gravatar-GPL-2.0.txt",
       "macos/Assets.car": "Assets.car",
       "macos/MailPortDocument.icns": "MailPortDocument.icns",

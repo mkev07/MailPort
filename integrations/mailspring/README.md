@@ -118,8 +118,11 @@ with a recent Clang toolchain.
 
 ## Credential read-back from the isolated test profile
 
-After importing the two unmodified Vault sample accounts into the dedicated
-`/tmp/mailport-mailspring-e2e` profile, run the following from the Mailspring
+Create two synthetic accounts in Vault using `sample1@example.com` and
+`sample2@example.com`. Set both IMAP and SMTP passwords to
+`PUBLIC-SYNTHETIC-PASSWORD-1` for the first account and
+`PUBLIC-SYNTHETIC-PASSWORD-2` for the second. Import only those accounts into
+the dedicated `/tmp/mailport-mailspring-e2e` profile, then run the following from the Mailspring
 checkout, replacing the script path with the absolute path in your MailPort
 checkout. It compares the synthetic credentials without displaying them:
 

@@ -30,18 +30,21 @@ Allo 1.0.3 by Josh Puckett, derived from Inter by Rasmus Andersson.
 Source: https://github.com/joshpuckett/allo
 
 The font is bundled locally through the `allo-font` package and remains licensed
-under SIL Open Font License 1.1. See licenses/Allo-OFL.txt. MailPort application
+under SIL Open Font License 1.1. See Allo-OFL.txt in the bundled licenses
+directory (source: licenses/Allo-OFL.txt). MailPort application
 code remains MIT licensed.
 
 ## Sonner
 
 MailPort uses [Sonner](https://github.com/emilkowalski/sonner) under the MIT
-license. See [the license](licenses/sonner.txt).
+license. See sonner.txt in the bundled licenses directory (source:
+licenses/sonner.txt).
 
 ## Gravatar Quick Editor
 
 MailPort Vault bundles Gravatar Quick Editor 0.8.0 by Automattic Inc. under
-GPL-2.0-or-later. See [the full license](licenses/Gravatar-GPL-2.0.txt) and
+GPL-2.0-or-later. See Gravatar-GPL-2.0.txt in the bundled licenses directory
+(source: licenses/Gravatar-GPL-2.0.txt) and
 [the corresponding SDK source](https://github.com/Automattic/gravatar/tree/8f8d681945d77a2586699f6dc2a208878dfd4263/web/packages/quick-editor).
 The Vault build containing this library is distributed under GPL-2.0-or-later.
 MailPort's original source and its separately distributed provisioning SDK
