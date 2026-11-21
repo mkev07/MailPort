@@ -52,6 +52,21 @@ pub struct VaultState {
     touch_id_available: bool,
     lock_generation: AtomicU64,
 }
+impl VaultState {
+    pub(crate) fn lock(&self) -> Result<()> {
+        let mut session = self.session.lock().map_err(|_| "Vault is unavailable.")?;
+        self.lock_generation.fetch_add(1, Ordering::Relaxed);
+        *session = None;
+        Ok(())
+    }
+
+    fn check_lock_generation(&self, generation: u64) -> Result<()> {
+        if generation != self.lock_generation.load(Ordering::Relaxed) {
+            return Err("The vault was locked during this operation. Try again.".into());
+        }
+        Ok(())
+    }
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionSummary {
@@ -202,9 +217,14 @@ pub fn vault_status(state: tauri::State<VaultState>) -> Result<Status> {
 #[tauri::command]
 pub async fn vault_create(app: AppHandle, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
+    let generation = app
+        .state::<VaultState>()
+        .lock_generation
+        .load(Ordering::Relaxed);
     blocking(move || {
         let state = app.state::<VaultState>();
         let mut guard = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+        state.check_lock_generation(generation)?;
         if state.path.exists() {
             return Err("A vault already exists. Unlock it instead.".into());
         }
@@ -225,11 +245,18 @@ pub async fn vault_create(app: AppHandle, password: String) -> Result<()> {
 #[tauri::command]
 pub async fn vault_unlock(app: AppHandle, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
+    let generation = app
+        .state::<VaultState>()
+        .lock_generation
+        .load(Ordering::Relaxed);
     blocking(move || {
         let state = app.state::<VaultState>();
         let mut guard = state.session.lock().map_err(|_| "Vault is unavailable.")?;
+        state.check_lock_generation(generation)?;
         let (accounts, profiles) =
             mailport_core::unlock_local(&mailport_core::read_encrypted(&state.path)?, &password)?;
+        let (accounts, profiles) =
+            remove_legacy_samples(&state.path, &password, accounts, profiles)?;
         *guard = Some(Session {
             accounts,
             profiles,
@@ -250,13 +277,16 @@ pub enum QuickMethod {
 
 #[tauri::command]
 pub async fn vault_quick_unlock(app: AppHandle, method: QuickMethod) -> Result<()> {
+    let generation = app
+        .state::<VaultState>()
+        .lock_generation
+        .load(Ordering::Relaxed);
     blocking(move || {
         let state = app.state::<VaultState>();
         let _operation = state
             .quick_operation
             .try_lock()
             .map_err(|_| "An unlock request is already in progress.")?;
-        let generation = state.lock_generation.load(Ordering::Relaxed);
         let (touch_id, reference) = {
             let preferences = state
                 .quick_preferences
@@ -284,6 +314,8 @@ pub async fn vault_quick_unlock(app: AppHandle, method: QuickMethod) -> Result<(
                 .map_err(|_| {
                     "The saved passphrase could not unlock this vault. Use your master passphrase."
                 })?;
+        let (accounts, profiles) =
+            remove_legacy_samples(&state.path, &password, accounts, profiles)?;
         *session = Some(Session {
             accounts,
             profiles,
@@ -370,10 +402,7 @@ pub async fn vault_configure_quick_unlock(
 
 #[tauri::command]
 pub fn vault_lock(state: tauri::State<VaultState>) -> Result<()> {
-    let mut session = state.session.lock().map_err(|_| "Vault is unavailable.")?;
-    state.lock_generation.fetch_add(1, Ordering::Relaxed);
-    *session = None;
-    Ok(())
+    state.lock()
 }
 #[tauri::command]
 pub fn vault_account(app: AppHandle, id: String) -> Result<Account> {
@@ -624,49 +653,121 @@ pub async fn vault_export(
     })
     .await
 }
-#[tauri::command]
-pub async fn vault_demo(app: AppHandle) -> Result<()> {
+fn is_legacy_sample(account: &Account) -> bool {
+    let Some(index) = account
+        .email
+        .strip_prefix("sample")
+        .and_then(|email| email.strip_suffix("@example.com"))
+    else {
+        return false;
+    };
+    if !matches!(index, "1" | "2" | "3" | "4" | "5") {
+        return false;
+    }
+    let matches = |server: &mailport_core::Server, host, port, security| {
+        server.host == host
+            && server.port == port
+            && server.security == security
+            && server.username == account.email
+            && match &server.auth {
+                Auth::Password { password } if index != "5" => {
+                    password.strip_prefix("PUBLIC-SYNTHETIC-PASSWORD-") == Some(index)
+                }
+                Auth::Oauth { provider_id } if index == "5" => provider_id == "example-provider",
+                _ => false,
+            }
+    };
+    matches(&account.incoming, "imap.example.com", 993, "tls")
+        && matches(&account.outgoing, "smtp.example.com", 587, "starttls")
+}
+
+fn remove_legacy_samples(
+    path: &std::path::Path,
+    password: &str,
+    mut accounts: Vec<Account>,
+    mut profiles: Profiles,
+) -> Result<(Vec<Account>, Profiles)> {
+    let before = accounts.len();
+    accounts.retain(|account| {
+        if is_legacy_sample(account) {
+            profiles.assignments.remove(&account.id);
+            false
+        } else {
+            true
+        }
+    });
+    if accounts.len() != before {
+        let encrypted = mailport_core::seal_local(&accounts, &profiles, password)?;
+        mailport_core::write_encrypted(path, &encrypted)?;
+    }
+    Ok((accounts, profiles))
+}
+
+#[cfg(test)]
+#[test]
+fn recognizes_legacy_samples_even_if_renamed_and_preserves_other_accounts() {
+    let email = "sample1@example.com";
+    let server = |host: &str, port, security: &str| mailport_core::Server {
+        host: host.into(),
+        port,
+        security: security.into(),
+        username: email.into(),
+        auth: Auth::Password {
+            password: "PUBLIC-SYNTHETIC-PASSWORD-1".into(),
+        },
+    };
+    let mut account = Account {
+        id: "demo".into(),
+        email: email.into(),
+        display_name: "Renamed demo".into(),
+        incoming: server("imap.example.com", 993, "tls"),
+        outgoing: server("smtp.example.com", 587, "starttls"),
+    };
+    assert!(is_legacy_sample(&account));
+    account.outgoing.auth = Auth::Password {
+        password: "different-test-secret".into(),
+    };
+    assert!(!is_legacy_sample(&account));
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn direct_account_summaries(app: &AppHandle) -> Vec<(String, String)> {
+    let state = app.state::<VaultState>();
+    let Ok(mut session) = state.session.lock() else {
+        return vec![];
+    };
+    expire(&mut session);
+    session.as_ref().map_or_else(Vec::new, |session| {
+        session
+            .accounts
+            .iter()
+            .map(|account| (account.id.clone(), account.email.clone()))
+            .collect()
+    })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn approve_direct_accounts(
+    app: AppHandle,
+    ids: Vec<String>,
+    request: ImportRequest,
+) -> Result<String> {
     blocking(move || {
-        with_session(&app, |session, path| {
-            if !session.accounts.is_empty() {
-                return Err("Sample accounts can only be added to an empty vault.".into());
-            }
-            let mut accounts = Vec::new();
-            for index in 1..=5 {
-                let auth = if index == 5 {
-                    Auth::Oauth {
-                        provider_id: "example-provider".into(),
-                    }
-                } else {
-                    Auth::Password {
-                        password: format!("PUBLIC-SYNTHETIC-PASSWORD-{index}"),
-                    }
-                };
-                let server = |host: &str, port, security: &str| mailport_core::Server {
-                    host: host.into(),
-                    port,
-                    security: security.into(),
-                    username: format!("sample{index}@example.com"),
-                    auth: auth.clone(),
-                };
-                accounts.push(Account {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    email: format!("sample{index}@example.com"),
-                    display_name: format!("Sample account {index}"),
-                    incoming: server("imap.example.com", 993, "tls"),
-                    outgoing: server("smtp.example.com", 587, "starttls"),
-                });
-            }
-            mailport_core::write_encrypted(
-                path,
-                &mailport_core::seal_local(&accounts, &session.profiles, &session.password)?,
-            )?;
-            session.accounts = accounts;
-            Ok(())
+        let state = app.state::<VaultState>();
+        let generation = with_session(&app, |session, _| {
+            mailport_core::select_accounts(&session.accounts, &ids)?;
+            Ok(state.lock_generation.load(Ordering::Relaxed))
+        })?;
+        quick_unlock::approve_transfer()?;
+        with_session(&app, |session, _| {
+            state.check_lock_generation(generation)?;
+            let selected = mailport_core::select_accounts(&session.accounts, &ids)?;
+            request.seal(&selected).map_err(str::to_owned)
         })
     })
     .await
 }
+
 pub fn setup(app: &mut tauri::App) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let directory = app.path().app_data_dir()?;
     std::fs::create_dir_all(&directory)?;
@@ -704,6 +805,29 @@ pub fn vault_touch(app: AppHandle) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_lock_clears_a_paused_session_and_invalidates_pending_unlocks() {
+        let state = VaultState {
+            path: PathBuf::new(),
+            session: Mutex::new(Some(Session {
+                accounts: vec![],
+                profiles: Profiles::default(),
+                password: Zeroizing::new("synthetic-session-only".into()),
+                touched: Instant::now(),
+                paused_remaining: Some(IDLE_LIMIT),
+            })),
+            quick_preferences: Mutex::new(quick_unlock::Preferences::default()),
+            quick_operation: Mutex::new(()),
+            touch_id_available: false,
+            lock_generation: AtomicU64::new(0),
+        };
+        state.lock().unwrap();
+        assert!(state.session.lock().unwrap().is_none());
+        assert!(state.check_lock_generation(0).is_err());
+        assert!(state.check_lock_generation(1).is_ok());
+    }
+
     #[test]
     fn idle_sessions_drop_credentials_and_recent_sessions_remain() {
         let make = |touched| {

@@ -5,6 +5,12 @@ account settings from MailPort Vault. This is a developer preview for synthetic
 data; the package is marked private and is not configured for npm publication. It requires Node.js
 22 or later and is distributed as an ES module.
 
+The `@mailport/sdk/browser` entry exports the transfer receiver as a bundled
+ES module. Use it in secure browser or extension contexts with Web Crypto and
+X25519 support. It shares the Node receiver's request, validation, import and
+retry logic. The browser's `transferPackageCode` returns a promise. The Node
+entry continues to return the code synchronously.
+
 The SDK handles request creation, transfer-code calculation, package
 decryption, validation, and per-account results. The receiving application is
 responsible for showing the verification codes, obtaining the user's approval,
@@ -19,6 +25,11 @@ demonstrates the file flow without persisting accounts. The
 describes the wire format and retry behavior; the
 [security model](https://github.com/mkev07/MailPort/blob/main/docs/security.md)
 describes host obligations and release gates.
+
+To try the SDK in a separate project, run `npm pack --workspace @mailport/sdk`
+from the repository root after `npm ci`. Packing builds both entry points.
+Install the resulting tarball in the receiving project's directory with
+`npm install /path/to/mailport-sdk-0.1.0.tgz`.
 
 The package has not received independent security review. The SDK does not
 prove that a provider accepted credentials or that a receiving client stored

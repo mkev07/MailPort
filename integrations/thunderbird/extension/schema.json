@@ -1,0 +1,19 @@
+[
+  {
+    "namespace": "mailPortPreview",
+    "functions": [
+      {
+        "name": "isAvailable",
+        "type": "function",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "saveSyntheticAccount",
+        "type": "function",
+        "async": true,
+        "parameters": [{ "name": "account", "type": "any" }]
+      }
+    ]
+  }
+]

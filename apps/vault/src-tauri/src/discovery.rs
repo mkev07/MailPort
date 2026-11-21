@@ -1,4 +1,8 @@
-use hickory_resolver::{config::ResolverOpts, system_conf::read_system_conf, TokioAsyncResolver};
+use hickory_resolver::{
+    config::ResolverOpts,
+    proto::rr::{Name, RData, RecordType},
+    TokioResolver,
+};
 use serde::Serialize;
 use std::time::Duration;
 
@@ -94,7 +98,7 @@ fn preset(domain: &str) -> Option<Discovery> {
 }
 
 async fn lookup(
-    resolver: &TokioAsyncResolver,
+    resolver: &TokioResolver,
     service: &str,
     domain: &str,
     security: &'static str,
@@ -104,17 +108,21 @@ async fn lookup(
         .await
         .ok()?;
     records
+        .answers()
         .iter()
         .filter_map(|record| {
-            let target = record.target().to_ascii();
+            let RData::SRV(record) = &record.data else {
+                return None;
+            };
+            let target = record.target.to_ascii();
             let host = target.trim_end_matches('.');
-            (record.port() > 0 && valid_domain(host)).then(|| {
+            (record.port > 0 && valid_domain(host)).then(|| {
                 (
-                    record.priority(),
-                    record.weight(),
+                    record.priority,
+                    record.weight,
                     Endpoint {
                         host: host.to_owned(),
-                        port: record.port(),
+                        port: record.port,
                         security,
                     },
                 )
@@ -199,13 +207,89 @@ fn hosted_settings(records: &[(u16, String)]) -> Option<Discovery> {
     })
 }
 
-async fn lookup_mx(resolver: &TokioAsyncResolver, domain: &str) -> Option<Discovery> {
+async fn lookup_mx(resolver: &TokioResolver, domain: &str) -> Option<Discovery> {
     let records = resolver.mx_lookup(format!("{domain}.")).await.ok()?;
     let targets: Vec<_> = records
+        .answers()
         .iter()
-        .map(|record| (record.preference(), record.exchange().to_ascii()))
+        .filter_map(|record| match &record.data {
+            RData::MX(record) => Some((record.preference, record.exchange.to_ascii())),
+            _ => None,
+        })
         .collect();
     hosted_settings(&targets)
+}
+
+async fn mail_alias(resolver: &TokioResolver, domain: &str, expected: &str) -> Option<String> {
+    let alias = format!("mail.{domain}");
+    let owner = Name::from_ascii(format!("{alias}.")).ok()?;
+    let target = Name::from_ascii(format!("{expected}.")).ok()?;
+    if let Ok(records) = resolver.lookup(owner.clone(), RecordType::CNAME).await {
+        let mut aliases = records.answers().iter().filter_map(|record| {
+            let RData::CNAME(name) = &record.data else {
+                return None;
+            };
+            (record.name == owner).then_some(&name.0)
+        });
+        if let Some(actual) = aliases.next() {
+            return (*actual == target && aliases.next().is_none()).then_some(alias);
+        }
+    }
+
+    // DNS providers can flatten an alias to address records.
+    let (alias_ips, target_ips) =
+        tokio::join!(resolver.lookup_ip(owner), resolver.lookup_ip(target),);
+    let alias_ips = alias_ips.ok()?;
+    let target_ips = target_ips.ok()?;
+    let mut addresses = alias_ips.iter().peekable();
+    let matches = addresses.peek().is_some()
+        && addresses.all(|ip| target_ips.iter().any(|target| target == ip));
+    matches.then_some(alias)
+}
+
+async fn alias_tls_valid(
+    connector: &tokio_native_tls::TlsConnector,
+    alias: &str,
+    target: &str,
+    port: u16,
+) -> bool {
+    // Verify the certificate for the alias against the already inferred mail host.
+    // Discovery never sends login data.
+    let handshake = async {
+        let stream = tokio::net::TcpStream::connect((target, port)).await.ok()?;
+        connector.connect(alias, stream).await.ok()
+    };
+    tokio::time::timeout(Duration::from_secs(2), handshake)
+        .await
+        .is_ok_and(|result| result.is_some())
+}
+
+async fn prefer_mxroute_alias(
+    resolver: &TokioResolver,
+    domain: &str,
+    mut inferred: Discovery,
+) -> Discovery {
+    let (Some(incoming), Some(outgoing)) = (&mut inferred.incoming, &mut inferred.outgoing) else {
+        return inferred;
+    };
+    let Some(alias) = mail_alias(resolver, domain, &incoming.host).await else {
+        return inferred;
+    };
+    let Ok(connector) = tokio_native_tls::native_tls::TlsConnector::new() else {
+        return inferred;
+    };
+    let connector = tokio_native_tls::TlsConnector::from(connector);
+    let (imap, smtp) = tokio::join!(
+        alias_tls_valid(&connector, &alias, &incoming.host, incoming.port),
+        alias_tls_valid(&connector, &alias, &outgoing.host, outgoing.port),
+    );
+    if imap {
+        incoming.host.clone_from(&alias);
+    }
+    if smtp {
+        outgoing.host = alias;
+    }
+    inferred
 }
 
 fn parse_autoconfig(xml: &str, domain: &str, require_domain: bool) -> Option<Discovery> {
@@ -285,7 +369,7 @@ async fn fetch_autoconfig(
     parse_autoconfig(std::str::from_utf8(&xml).ok()?, domain, require_domain)
 }
 
-async fn autoconfig(domain: &str) -> Discovery {
+async fn autoconfig(domain: &str, include_directory: bool) -> Discovery {
     let Ok(client) = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(3))
@@ -306,12 +390,18 @@ async fn autoconfig(domain: &str) -> Discovery {
             domain,
             false
         ),
-        fetch_autoconfig(
-            &client,
-            format!("https://autoconfig.thunderbird.net/v1.1/{domain}"),
-            domain,
-            true
-        ),
+        async {
+            if !include_directory {
+                return None;
+            }
+            fetch_autoconfig(
+                &client,
+                format!("https://autoconfig.thunderbird.net/v1.1/{domain}"),
+                domain,
+                true,
+            )
+            .await
+        },
     );
     [subdomain, well_known, directory]
         .into_iter()
@@ -332,11 +422,15 @@ pub async fn discover_mail_servers(domain: String) -> Result<Discovery, String> 
     if let Some(result) = preset(&domain) {
         return Ok(result);
     }
-    let (config, _) = read_system_conf().map_err(|_| "The system DNS resolver is unavailable.")?;
+    let mut builder =
+        TokioResolver::builder_tokio().map_err(|_| "The system DNS resolver is unavailable.")?;
     let mut options = ResolverOpts::default();
     options.timeout = Duration::from_secs(2);
     options.attempts = 1;
-    let resolver = TokioAsyncResolver::tokio(config, options);
+    *builder.options_mut() = options;
+    let resolver = builder
+        .build()
+        .map_err(|_| "The system DNS resolver is unavailable.")?;
     let (imaps, imap, submissions, submission, hosted) = tokio::join!(
         lookup(&resolver, "_imaps", &domain, "tls"),
         lookup(&resolver, "_imap", &domain, "starttls"),
@@ -348,6 +442,25 @@ pub async fn discover_mail_servers(domain: String) -> Result<Discovery, String> 
     let mut outgoing = submissions.or(submission);
     let mut provider = None;
     if let Some(hosted) = hosted {
+        if hosted.provider.is_none() {
+            // Prefer explicit settings and verified aliases before using the
+            // routing hostname for a protocol.
+            if incoming.is_none() || outgoing.is_none() {
+                let explicit = autoconfig(&domain, false).await;
+                incoming = incoming.or(explicit.incoming);
+                outgoing = outgoing.or(explicit.outgoing);
+            }
+            if incoming.is_none() || outgoing.is_none() {
+                let settings = prefer_mxroute_alias(&resolver, &domain, hosted).await;
+                incoming = incoming.or(settings.incoming);
+                outgoing = outgoing.or(settings.outgoing);
+            }
+            return Ok(Discovery {
+                incoming,
+                outgoing,
+                provider,
+            });
+        }
         let matches_host = |public: &Option<Endpoint>, inferred: &Option<Endpoint>| {
             public.as_ref().is_none_or(|endpoint| {
                 inferred
@@ -362,7 +475,7 @@ pub async fn discover_mail_servers(domain: String) -> Result<Discovery, String> 
         outgoing = outgoing.or(hosted.outgoing);
     }
     if incoming.is_none() || outgoing.is_none() {
-        let settings = autoconfig(&domain).await;
+        let settings = autoconfig(&domain, true).await;
         incoming = incoming.or(settings.incoming);
         outgoing = outgoing.or(settings.outgoing);
     }
@@ -376,6 +489,83 @@ pub async fn discover_mail_servers(domain: String) -> Result<Discovery, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn resolver_reads_srv_mx_and_cname_answers_over_loopback() {
+        use hickory_resolver::{
+            config::{ConnectionConfig, NameServerConfig, ResolverConfig},
+            net::runtime::TokioRuntimeProvider,
+            proto::{
+                op::{Message, OpCode},
+                rr::{
+                    rdata::{CNAME, MX, SRV},
+                    Record, RecordType,
+                },
+            },
+        };
+        use tokio::net::UdpSocket;
+
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = socket.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut buffer = [0; 4096];
+            for _ in 0..3 {
+                let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+                let request = Message::from_vec(&buffer[..len]).unwrap();
+                let query = &request.queries[0];
+                let data = match query.query_type {
+                    RecordType::SRV => {
+                        RData::SRV(SRV::new(0, 0, 993, "imap.example.test.".parse().unwrap()))
+                    }
+                    RecordType::MX => {
+                        RData::MX(MX::new(10, "safari.mxrouting.net.".parse().unwrap()))
+                    }
+                    RecordType::CNAME => {
+                        assert_eq!(query.name.to_ascii(), "mail.example.test.");
+                        RData::CNAME(CNAME("safari.mxrouting.net.".parse().unwrap()))
+                    }
+                    _ => panic!("unexpected fixture query"),
+                };
+                let mut reply = Message::response(request.metadata.id, OpCode::Query);
+                reply.metadata.recursion_available = true;
+                reply.add_query(query.clone());
+                reply.add_answer(Record::from_rdata(query.name.clone(), 60, data));
+                socket
+                    .send_to(&reply.to_vec().unwrap(), peer)
+                    .await
+                    .unwrap();
+            }
+        });
+        let mut connection = ConnectionConfig::udp();
+        connection.port = address.port();
+        let config = ResolverConfig::from_name_servers(vec![NameServerConfig::new(
+            address.ip(),
+            true,
+            vec![connection],
+        )]);
+        let resolver = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
+            .build()
+            .unwrap();
+        let endpoint = lookup(&resolver, "_imaps", "example.test", "tls")
+            .await
+            .unwrap();
+        assert_eq!(
+            (endpoint.host.as_str(), endpoint.port),
+            ("imap.example.test", 993)
+        );
+        let mx = lookup_mx(&resolver, "example.test").await.unwrap();
+        assert_eq!(mx.incoming.unwrap().host, "safari.mxrouting.net");
+        assert_eq!(
+            mail_alias(&resolver, "example.test", "safari.mxrouting.net")
+                .await
+                .as_deref(),
+            Some("mail.example.test")
+        );
+        assert!(mail_alias(&resolver, "example.test", "other.mxrouting.net")
+            .await
+            .is_none());
+        server.await.unwrap();
+    }
 
     #[test]
     fn recognizes_mxroute_primary_without_using_an_unrelated_mx_as_a_client_host() {

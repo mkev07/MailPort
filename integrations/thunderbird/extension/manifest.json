@@ -1,0 +1,28 @@
+{
+  "manifest_version": 2,
+  "name": "MailPort Import Preview",
+  "version": "0.1.0",
+  "description": "Import synthetic MailPort accounts into an offline Thunderbird test profile.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "mailport-preview@mailport.invalid",
+      "strict_min_version": "138.0"
+    }
+  },
+  "background": { "scripts": ["background.js"] },
+  "browser_action": {
+    "default_title": "Import from MailPort",
+    "allowed_spaces": ["mail", "default"]
+  },
+  "content_security_policy": "script-src 'self'; object-src 'none'",
+  "experiment_apis": {
+    "mailPortPreview": {
+      "schema": "schema.json",
+      "parent": {
+        "scopes": ["addon_parent"],
+        "paths": [["mailPortPreview"]],
+        "script": "api.js"
+      }
+    }
+  }
+}

@@ -60,6 +60,17 @@ and complete two real client integrations. Browser and native support each need
 platform-specific review. Automated tests are evidence for the tested behaviors,
 not a security audit.
 
+### Dependency checks
+
+The preview was checked with `npm audit` and OSV-Scanner against
+`Cargo.lock`. The npm audit reported no advisories. Updating Hickory to
+0.26.3, Tokio to 1.54.1, and rustix to 1.1.6 removed their reported entries.
+A local DNS fixture verifies that account discovery still reads SRV and MX
+records. The Rust scan still reports upstream maintenance notices and
+RUSTSEC-2024-0429 in the Linux GTK/WebKit dependency chain. Evaluate that
+advisory for the Linux build as part of release review.
+[RustSec advisory](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)
+
 ## Desktop prototype
 
 The Tauri backend owns vault file paths, unlocked account state and native export

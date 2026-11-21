@@ -1,14 +1,87 @@
-use tauri::Manager;
+use tauri::{
+    webview::{NewWindowResponse, WebviewWindowBuilder},
+    Manager, Url, WebviewUrl,
+};
 
+mod avatar_cache;
+#[cfg(target_os = "macos")]
+mod direct_import;
 mod discovery;
 #[cfg(target_os = "macos")]
 mod macos;
 mod profiles;
 mod quick_unlock;
+#[cfg(target_os = "macos")]
+mod receiver_identity;
 mod vault;
+#[cfg(target_os = "macos")]
+mod vault_lifecycle;
 mod window;
 
 const WINDOW_STATE_FILE: &str = ".window-state-v3.json";
+
+fn is_gravatar_editor(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("gravatar.com")
+        && url.port().is_none()
+        && url.path() == "/profile"
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "scope" && value == "avatars")
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "is_quick_editor" && value == "true")
+}
+
+fn is_gravatar_navigation(url: &Url) -> bool {
+    url.as_str() == "about:blank"
+        || (url.scheme() == "https"
+            && url.port().is_none()
+            && matches!(
+                url.host_str(),
+                Some(
+                    "gravatar.com"
+                        | "www.gravatar.com"
+                        | "wordpress.com"
+                        | "public-api.wordpress.com"
+                )
+            ))
+}
+
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let Some(config) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+    else {
+        return Ok(());
+    };
+    let handle = app.handle().clone();
+    WebviewWindowBuilder::from_config(app, config)?
+        .on_new_window(move |url, features| {
+            if !is_gravatar_editor(&url) || handle.get_webview_window("gravatar-editor").is_some() {
+                return NewWindowResponse::Deny;
+            }
+            let window = WebviewWindowBuilder::new(
+                &handle,
+                "gravatar-editor",
+                WebviewUrl::External("about:blank".parse().expect("valid blank URL")),
+            )
+            .window_features(features)
+            .title("Edit Gravatar photo")
+            .on_navigation(is_gravatar_navigation)
+            .on_new_window(|_, _| NewWindowResponse::Deny)
+            .build();
+            match window {
+                Ok(window) => NewWindowResponse::Create { window },
+                Err(_) => NewWindowResponse::Deny,
+            }
+        })
+        .build()?;
+    Ok(())
+}
 
 fn fit_first_launch_window(app: &tauri::App) {
     let Ok(config_dir) = app.path().app_config_dir() else {
@@ -83,6 +156,17 @@ pub fn run() {
         )
         .setup(|app| {
             vault::setup(app)?;
+            app.manage(avatar_cache::AvatarCache::default());
+            create_main_window(app)?;
+            #[cfg(target_os = "macos")]
+            {
+                app.manage(direct_import::DirectImport::default());
+                if let Err(error) = direct_import::start(app.handle()) {
+                    eprintln!("mailport: direct import is unavailable: {}", error.kind());
+                }
+            }
+            #[cfg(target_os = "macos")]
+            vault_lifecycle::install(app.handle().clone());
             fit_first_launch_window(app);
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
@@ -96,6 +180,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            avatar_cache::vault_avatar,
+            avatar_cache::vault_cache_size,
+            avatar_cache::vault_clear_cache,
             window::set_window_glass_enabled,
             window::set_vault_control_glass,
             window::system_accent_color,
@@ -111,12 +198,19 @@ pub fn run() {
             vault::vault_lock,
             vault::vault_account,
             vault::vault_save_account,
+            #[cfg(target_os = "macos")]
+            direct_import::vault_direct_request,
+            #[cfg(target_os = "macos")]
+            direct_import::vault_link_mailspring,
+            #[cfg(target_os = "macos")]
+            direct_import::vault_direct_approve,
+            #[cfg(target_os = "macos")]
+            direct_import::vault_direct_cancel,
             vault::vault_load_import_request,
             vault::vault_export,
             vault::vault_save_profile,
             vault::vault_move_account,
             vault::vault_delete_accounts,
-            vault::vault_demo,
             vault::vault_touch,
         ]);
 

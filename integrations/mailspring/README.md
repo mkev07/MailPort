@@ -1,7 +1,7 @@
 # Mailspring integration preview
 
-This is a local, synthetic-data proof of concept, not an official Mailspring
-plugin or a release for real accounts. `preview.patch` contains changes against
+This is a local developer preview for test accounts. It is independent of the
+official Mailspring release. `preview.patch` contains changes against
 Mailspring and is provided under Mailspring's GPL-3.0 license. The generated SDK
 bundle includes MailPort and third-party dependencies; review their licenses and
 attribution before distributing it.
@@ -27,7 +27,7 @@ inspect the checkout before retrying; it may contain a partially prepared previe
 The patch includes a test-only onboarding
 bypass and disables automatic login-item changes only when the preview is enabled
 for a development build with an explicit profile path.
-It must not be enabled for real credentials or merged upstream as-is.
+Use a dedicated Mailspring profile and test mailboxes when evaluating this integration.
 
 Install dependencies from inside the Mailspring checkout. The clean macOS
 setup used Node.js 22 and npm 10.9.8 for both the root install and the nested
@@ -43,11 +43,33 @@ Run the preview with a dedicated configuration directory:
 env -u ELECTRON_RUN_AS_NODE npm start -- --mailport-preview --config-dir-path /tmp/mailport-mailspring-e2e
 ```
 
-This starts a separate profile for synthetic password accounts. The preview
-checks both transfer codes and saves each account record with its encrypted IMAP
+This starts a separate profile for synthetic password accounts. The file transfer route
+checks both transfer codes. Both routes save each account record with its encrypted IMAP
 and SMTP credentials in one configuration replacement. It does not test mail
-server connectivity. OAuth accounts and conflicting accounts or credentials
-are refused.
+server connectivity. Accounts that require OAuth appear under
+**Sign in separately** for the current import screen. Add those accounts
+through Mailspring's provider setup. The preview refuses conflicting accounts
+and credentials.
+
+### Direct import on Mac
+
+1. Keep the Mailspring preview running.
+2. Unlock MailPort Vault and choose **Link email app → Link Mailspring**.
+3. Copy the **Request code** from Mailspring into MailPort. Select the accounts,
+   then click **Approve import** in the right sidebar and confirm the macOS prompt.
+4. Enter the **Transfer code** shown in MailPort into Mailspring and click
+   **Import accounts**. Finish any provider sign-in in Mailspring.
+
+You can also start from **Import from MailPort → Open MailPort** in Mailspring.
+The apps exchange the encrypted package over a local socket. The request code
+verifies which app session receives the accounts. The transfer code verifies
+the package before Mailspring saves it. **Create import request** still starts
+the encrypted file transfer route.
+
+An identity test build can additionally pin a receiving app's macOS code-signing
+requirement with `MAILPORT_DIRECT_RECEIVER_REQUIREMENT`. With a pin configured,
+Vault rejects sockets that fail Apple's requirement check against the
+kernel's peer audit token. The preview links a running Mailspring instance.
 
 If a save fails while the request is still open, retry the same package after
 resolving the storage error. After Mailspring restarts, create a new request and
@@ -96,8 +118,11 @@ with a recent Clang toolchain.
 
 ## Credential read-back from the isolated test profile
 
-After importing the two unmodified Vault sample accounts into the dedicated
-`/tmp/mailport-mailspring-e2e` profile, run the following from the Mailspring
+Create two synthetic accounts in Vault using `sample1@example.com` and
+`sample2@example.com`. Set both IMAP and SMTP passwords to
+`PUBLIC-SYNTHETIC-PASSWORD-1` for the first account and
+`PUBLIC-SYNTHETIC-PASSWORD-2` for the second. Import only those accounts into
+the dedicated `/tmp/mailport-mailspring-e2e` profile, then run the following from the Mailspring
 checkout, replacing the script path with the absolute path in your MailPort
 checkout. It compares the synthetic credentials without displaying them:
 

@@ -6,10 +6,11 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const { spawnSync } = require('node:child_process');
 const { once } = require('node:events');
+const { setTimeout: delay } = require('node:timers/promises');
 
 const root = fs.realpathSync(process.argv[2]);
 const mode = process.argv[3] || 'success';
-assert.ok(['success', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race'].includes(mode));
+assert.ok(['success', 'provider-sign-in', 'write-error', 'crash-before', 'crash-after', 'legacy-orphan', 'credential-conflict', 'credential-race'].includes(mode));
 const mailspring = createRequire(path.join(root, 'package.json'));
 const { _electron } = mailspring('playwright');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mailport-ui-test-'));
@@ -17,6 +18,7 @@ const configPath = path.join(profile, 'config.json');
 const interruptionPath = path.join(profile, 'test-interruption');
 const binary = process.platform === 'win32' ? 'compatibility.exe' : 'compatibility';
 const vector = require('../../docs/vectors/v1.json').accounts[0];
+const localMail = process.env.MAILPORT_LOCAL_MAIL ? JSON.parse(process.env.MAILPORT_LOCAL_MAIL) : undefined;
 const sample = {
   ...vector,
   email: 'ui-sample@example.com',
@@ -24,6 +26,21 @@ const sample = {
   outgoing: { ...vector.outgoing, auth: { type: 'password', password: 'PUBLIC-SYNTHETIC-SMTP' } },
 };
 const another = { ...sample, id: '00000000-0000-4000-8000-000000000002', email: 'second-ui@example.com' };
+const oauth = {
+  ...another, email: 'google-preview@example.com',
+  incoming: { ...another.incoming, auth: { type: 'oauth', providerId: 'google' } },
+};
+if (localMail) {
+  assert.equal(mode, 'success');
+  for (const [index, account] of [sample, another].entries()) {
+    const number = index + 1;
+    account.email = `synthetic-${number}@example.com`;
+    account.incoming = { host: 'localhost', port: localMail.imapPort, security: 'tls', username: `imap-${number}`,
+      auth: { type: 'password', password: `PUBLIC-SYNTHETIC-IMAP-${number}` } };
+    account.outgoing = { host: 'localhost', port: localMail.smtpPort, security: 'starttls', username: `smtp-${number}`,
+      auth: { type: 'password', password: `PUBLIC-SYNTHETIC-SMTP-${number}` } };
+  }
+}
 const env = { ...process.env, PLAYWRIGHT: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.MAILPORT_PREVIEW;
@@ -132,18 +149,92 @@ async function assertSaved(accounts) {
     assert.ok(record);
     assert.equal(record.settings.imap_security, 'SSL / TLS');
     assert.equal(record.settings.smtp_security, 'STARTTLS');
+    assert.equal(record.settings.imap_allow_insecure_ssl, false);
+    assert.equal(record.settings.smtp_allow_insecure_ssl, false);
     assert.ok(!('imap_password' in record.settings) && !('smtp_password' in record.settings));
   }
-  const matches = await app.evaluate(async ({ safeStorage }, emails) => {
+  const matches = await app.evaluate(async ({ safeStorage }, expected) => {
     const fs = process.getBuiltinModule('node:fs');
     const manager = global.application.configPersistenceManager;
     const settings = JSON.parse(fs.readFileSync(manager.configFilePath, 'utf8'))['*'];
     const decrypted = await safeStorage.decryptStringAsync(Buffer.from(settings.credentials.data));
     const keys = JSON.parse(decrypted.result);
-    return emails.every(email => keys[`${email}-imap`] === 'PUBLIC-SYNTHETIC-IMAP' &&
-      keys[`${email}-smtp`] === 'PUBLIC-SYNTHETIC-SMTP');
-  }, accounts.map(account => account.email));
+    return expected.every(account => keys[`${account.email}-imap`] === account.incoming.auth.password &&
+      keys[`${account.email}-smtp`] === account.outgoing.auth.password);
+  }, accounts);
   assert.equal(matches, true);
+}
+
+async function checkLocalMail() {
+  const outcomes = await app.evaluate(async ({ safeStorage }, binary) => {
+    const { spawn } = process.getBuiltinModule('node:child_process');
+    const fs = process.getBuiltinModule('node:fs');
+    const manager = global.application.configPersistenceManager;
+    const settings = JSON.parse(fs.readFileSync(manager.configFilePath, 'utf8'))['*'];
+    const decoded = await safeStorage.decryptStringAsync(Buffer.from(settings.credentials.data));
+    const keys = JSON.parse(decoded.result);
+    async function test(account) {
+      return new Promise((resolve, reject) => {
+        const child = spawn(binary, ['--mode', 'test'], {
+          env: { ...process.env, CONFIG_DIR_PATH: manager.configDirPath, IDENTITY_SERVER: 'unknown' },
+          timeout: 20000,
+        });
+        let stdout = '';
+        child.stdout.setEncoding('utf8');
+        child.stdout.once('data', () => child.stdin.end(`${JSON.stringify(account)}\nnull\n`));
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.stderr.resume();
+        child.stdin.on('error', reject);
+        child.on('error', reject);
+        child.on('close', code => {
+          const last = stdout.trim().split('\n').findLast(line => line.startsWith('{'));
+          if (!last) return reject(new Error('Mailsync did not return an account-check result'));
+          try {
+            resolve({ code, reply: JSON.parse(last) });
+          } catch {
+            reject(new Error('Unexpected Mailsync output'));
+          }
+        });
+      });
+    }
+    const outcomes = [];
+    for (const account of settings.accounts) {
+      account.settings.imap_password = keys[`${account.emailAddress}-imap`];
+      account.settings.smtp_password = keys[`${account.emailAddress}-smtp`];
+      const result = await test(account);
+      outcomes.push({ code: result.code, error: result.reply.error ?? null });
+    }
+    return outcomes;
+  }, path.join(root, 'app', process.platform === 'win32' ? 'mailsync.exe' : 'mailsync'));
+  assert.deepEqual(outcomes, [{ code: 0, error: null }, { code: 0, error: null }],
+    'The native Mailspring account check failed');
+  console.log('Both imported Mailspring accounts passed the native IMAP and SMTP account check after restart.');
+
+  const persisted = config().accounts;
+  const expected = [sample, another].map((account, index) => ({
+    id: persisted.find(item => item.emailAddress === account.email).id,
+    subject: `MailPort authenticated loopback ${2 - index}`,
+  }));
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const synced = await app.evaluate((_electron, expected) => {
+      const { DatabaseSync } = process.getBuiltinModule('node:sqlite');
+      const path = process.getBuiltinModule('node:path');
+      const manager = global.application.configPersistenceManager;
+      const db = new DatabaseSync(path.join(manager.configDirPath, 'edgehill.db'), { readOnly: true });
+      try {
+        const find = db.prepare('SELECT 1 FROM Message WHERE accountId = ? AND subject = ? LIMIT 1');
+        return expected.every(({ id, subject }) => find.get(id, subject));
+      } finally {
+        db.close();
+      }
+    }, expected);
+    if (synced) {
+      console.log('Both imported Mailspring accounts synced the test messages into their inbox database.');
+      return;
+    }
+    await delay(500);
+  }
+  throw new Error('Mailspring did not sync the test messages into both imported accounts');
 }
 
 async function interruptWrite() {
@@ -179,7 +270,8 @@ async function main() {
   }
 
   const page = await importPage();
-  await prepare(page, mode === 'success' ? [sample, another] : [sample]);
+  const selected = mode === 'provider-sign-in' ? [oauth, sample] : mode === 'success' ? [sample, another] : [sample];
+  await prepare(page, selected);
   const before = fs.readFileSync(configPath, 'utf8');
   const credentials = config().credentials;
 
@@ -240,6 +332,17 @@ async function main() {
       const expected = mode === 'success' ? [sample, another] : [sample];
       await page.getByText(`${expected.length} account(s) saved in the local profile.`, { exact: false }).waitFor();
       await assertSaved(expected);
+      if (mode === 'provider-sign-in') {
+        const signIns = page.getByRole('region', { name: 'Sign in separately' });
+        await signIns.getByText(oauth.email).waitFor();
+        assert.ok(!(await page.getByRole('status').innerText()).includes('could not be imported'));
+        const hasDeferredCredentials = await app.evaluate(async ({ safeStorage }, email) => {
+          const credentials = global.application.configPersistenceManager.settings.credentials;
+          const decoded = await safeStorage.decryptStringAsync(Buffer.from(credentials.data));
+          return Object.keys(JSON.parse(decoded.result)).some(key => key.startsWith(`${email}-`));
+        }, oauth.email);
+        assert.equal(hasDeferredCredentials, false);
+      }
       if (mode === 'legacy-orphan') assert.deepEqual(config().credentials, credentials);
       if (mode === 'credential-race') {
         const preserved = await app.evaluate(async ({ safeStorage }) => {
@@ -250,6 +353,12 @@ async function main() {
         assert.equal(preserved, true);
       }
     }
+  }
+  if (localMail) {
+    await closePreview();
+    await launch();
+    await assertSaved([sample, another]);
+    await checkLocalMail();
   }
   console.log(`Mailspring synthetic import check passed (${mode}).`);
 }

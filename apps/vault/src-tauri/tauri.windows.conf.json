@@ -4,6 +4,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "dragDropEnabled": false,
         "title": "MailPort Vault",
         "width": 1500,
@@ -31,6 +32,10 @@
         "installerIcon": "icons/icon.ico"
       }
     },
-    "resources": null
+    "resources": {
+      "macos/Assets.car": null,
+      "macos/MailPortDocument.icns": null,
+      "macos/MailPortRequest.icns": null
+    }
   }
 }

@@ -28,14 +28,83 @@ synthetic. No provider sign-in, mailbox connection or message sending occurred.
 - Quit and reopened the rebuilt app; it started locked and the five accounts plus saved edit survived correct unlock.
 - Escape dismissed the editor and keyboard focus returned to its Edit button. The export dialog focused its password field and displayed accessible labels.
 
+## Windows and Linux preview packaging
+
+- Windows CI silently installed the NSIS package into a temporary directory
+  and verified that the installed app opened a native window.
+- On Ubuntu 24.04, CI launched the extracted Debian executable and the
+  AppImage in extract-and-run mode. Each initialized a separate application
+  profile under Xvfb and D-Bus and stayed running through the startup check.
+
+The Windows and Linux jobs on `40fb45b` uploaded the
+`mailport-vault-windows-preview` and `mailport-vault-linux-preview` artifacts.
+[Hosted checks and downloads](https://github.com/mkev07/MailPort/actions/runs/44757263072)
+
+## Windows laptop acceptance
+
+The `40fb45b` NSIS preview installed and ran in the interactive Windows
+desktop with a fresh MailPort profile and five synthetic accounts.
+
+- Locking hid the accounts. The wrong passphrase was rejected. The app started
+  locked after a restart, and unlocking restored all five accounts.
+- The native file picker opened the SDK receiver's transfer request. Vault
+  rejected the request while the device clocks were substantially out of sync.
+  After the clocks were aligned, the request codes matched. Canceling the first
+  save kept the request usable, and retrying produced a package.
+- The SDK matched the exported package code and decoded exactly the two
+  selected accounts. The password account retained both server credentials
+  and the OAuth account still required provider sign-in.
+- The vault owner could read the encrypted file. A separate standard Windows
+  user was denied read access to that same file.
+
+## Linux Debian package acceptance
+
+The `d8947e6` Debian package from CI installed with `apt` on Ubuntu 24.04
+amd64 under Docker emulation on Apple Silicon. The installed executable ran
+under Xvfb and D-Bus with a fresh profile.
+
+- Created an encrypted vault with five synthetic accounts. Locking hid the
+  accounts and rejected a wrong passphrase. After restarting, the app
+  required unlock and restored all five accounts.
+- Opened the SDK request in the native GTK chooser and matched its code.
+  Canceling the first save left the request usable. Retrying saved an
+  encrypted package through the native dialog.
+- The vault and exported package both had mode 0600. The SDK verified the
+  displayed package code and decoded exactly the two selected accounts,
+  preserving the IMAP and SMTP credentials and pending OAuth sign-in.
+
+## Native AppImage mount
+
+The `d8947e6` AppImage from CI mounted with FUSE on a native Ubuntu 24.04
+amd64 host. The kernel mount table confirmed the active mount, and the
+mounted image contained the launcher and Vault executable. The headless
+host lacked EGL libraries. Staging those libraries resolved the missing
+dependencies, but EGL and GTK initialization still failed under Xvfb before
+the app opened a window. Interactive acceptance remains open.
+
 ## Remaining acceptance
 
-Windows and Linux native builds and runtime behavior have not been verified on
-this Mac. CI includes native build jobs for both. Full VoiceOver/screen-reader,
+Use a disposable macOS user account or VM to launch the signed Vault, create
+a synthetic vault, lock and unlock it, and approve and save a transfer through
+the native dialog. On Linux, repeat the vault workflow from the AppImage
+mounted with FUSE in a desktop session. Windows signing remains open.
+
+Full VoiceOver/screen-reader,
 keyboard-only end-to-end, zoom/contrast and real five-minute idle acceptance are
-pending; only session expiry logic was exercised automatically. OS sleep/lock
-integration, native release signing/notarization, independent security review,
-provider compatibility and two real email clients remain release gates.
+pending. Automated tests cover session expiry and the macOS notification
+subscriptions for system sleep and session deactivation, including clearing a
+paused session through the shared backend lock. To verify physical sleep and
+user switching, unlock a synthetic vault, pause the idle timer, then sleep and
+wake the Mac or switch away and back. Confirm the vault requires a fresh unlock
+in both cases. A screen lock without sleep or a session switch requires
+separate acceptance.
+
+The [Apple Silicon release candidate](macos-release.md) passed Developer ID
+signature and notarization checks. Fresh-install runtime acceptance, release
+packaging on other targets, independent security review, and live provider
+compatibility remain open. The Mailspring and Thunderbird
+previews have imported synthetic accounts and sent and received messages
+against controlled servers. Their distribution readiness remains open.
 
 The preview vault contains only synthetic sample accounts. Its disposable
 passphrase is `MailPort-demo-only-2026`. Never reuse this publicly documented

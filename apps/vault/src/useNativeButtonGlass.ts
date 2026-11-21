@@ -180,12 +180,16 @@ export function useNativeButtonGlass() {
         queue();
     }
 
-    function onExportHover(event: PointerEvent) {
+    function onControlHover(event: PointerEvent) {
       if (!(event.target instanceof Element)) return;
-      const button = event.target.closest(".export-action, .transfer-cancel");
+      const button = event.target.closest(".export-action, .action-reveal");
       if (button && !(event.relatedTarget instanceof Node && button.contains(event.relatedTarget))) {
         queue();
       }
+    }
+
+    function onControlFocus(event: FocusEvent) {
+      if (event.target instanceof Element && event.target.matches(".privacy-toggle, .account-card-delete-trigger")) queue();
     }
 
     function queue() {
@@ -226,7 +230,7 @@ export function useNativeButtonGlass() {
               (dialog ?? app!).querySelectorAll<HTMLElement>(
                 dialog
                   ? "button, .profile-preview .profile-avatar"
-                  : "button:not(.account-heading-select, .account-button, .profile-link, .auto-lock-pause), .auto-lock-control.is-revealed .auto-lock-pause, .profile-sidebar .profile-link .profile-avatar, .appearance-slider-track",
+                  : "button:not(.account-heading-select, .account-button, .account-passport, .profile-link, .auto-lock-pause, .privacy-toggle), .privacy-toggle:is(:hover, :focus-visible), .auto-lock-control.is-revealed .auto-lock-pause, .profile-sidebar .profile-link .profile-avatar, .appearance-slider-track",
               ),
             ),
           ]
@@ -324,8 +328,10 @@ export function useNativeButtonGlass() {
       onPassphraseTransition as EventListener,
     );
     reduced.addEventListener("change", queue);
-    app.addEventListener("pointerover", onExportHover);
-    app.addEventListener("pointerout", onExportHover);
+    app.addEventListener("pointerover", onControlHover);
+    app.addEventListener("pointerout", onControlHover);
+    app.addEventListener("focusin", onControlFocus);
+    app.addEventListener("focusout", onControlFocus);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onWindowResize);
     window.addEventListener("focus", queue);
@@ -356,8 +362,10 @@ export function useNativeButtonGlass() {
         onPassphraseTransition as EventListener,
       );
       reduced.removeEventListener("change", queue);
-      app.removeEventListener("pointerover", onExportHover);
-      app.removeEventListener("pointerout", onExportHover);
+      app.removeEventListener("pointerover", onControlHover);
+      app.removeEventListener("pointerout", onControlHover);
+      app.removeEventListener("focusin", onControlFocus);
+      app.removeEventListener("focusout", onControlFocus);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onWindowResize);
       window.removeEventListener("focus", queue);

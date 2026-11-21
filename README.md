@@ -12,9 +12,9 @@
 </p>
 
 > [!NOTE]
-> MailPort is a developer preview. Try it with the built-in sample accounts.
-> The demo receiver supports the transfer flow. Email clients still need to add
-> an integration, and independent security review is pending.
+> MailPort is a developer preview. Start with a test mailbox.
+> The Mailspring integration is a local preview. Email clients need to add an
+> integration, and independent security review is pending.
 
 ## Keep your email setup in one place
 
@@ -32,6 +32,13 @@ platforms and languages implement the same import flow.
 ## How transfers work
 
 <img src="apps/vault/public/mailport-document.png" width="96" height="96" align="right" alt="MailPort export document icon">
+
+On macOS, the [Mailspring preview](integrations/mailspring/README.md#direct-import-on-mac)
+can link directly to MailPort. Start the preview, choose **Link email app** in
+MailPort, select the accounts, and compare the request code before approving.
+Enter the transfer code in Mailspring to finish importing.
+
+The encrypted file flow also works with compatible receivers:
 
 1. **Start in the receiving app.** Choose **Import from MailPort** to create a
    `.mailport-request` file.
@@ -60,7 +67,7 @@ npm ci
 npm run vault:dev
 ```
 
-Create a vault and choose **Try sample accounts**. To exercise an export and
+Create a vault and add a test account. To exercise an export and
 import, run the [demo receiver](docs/transfer.md#try-it-with-synthetic-accounts)
 in a second terminal. For platform-specific build instructions, see the
 [desktop app guide](apps/vault/README.md#development).
@@ -71,6 +78,11 @@ The local vault uses scrypt and AES-256-GCM. Transfers use HPKE to encrypt
 only the selected accounts to the receiving session's public key. The codes
 shown in both apps let you verify the request and export. The transfer works
 offline between the two apps.
+
+The direct handoff preview uses a local socket on macOS and requires user
+approval. Its default development build does not verify the receiving app's
+code signature. A build can pin a receiver signing requirement for identity
+verification, as described in the [Mailspring guide](integrations/mailspring/README.md#direct-import-on-mac).
 
 For account avatars, the vault may request an image from Gravatar using a hash
 of the email address. Gravatar receives that hash and the network request;
@@ -103,9 +115,16 @@ npm run check:compatibility
 ```
 
 The compatibility suite checks the Rust sender and Node receiver, including
-wrong-recipient handling, retry, expiry, and replay. The next milestone is
-to import accounts into a real email client, then verify the same file
-protocol with a second independent integration.
+wrong-recipient handling, retry, expiry, and replay. The Mailspring and
+Thunderbird previews exercise the same file protocol and save synthetic
+accounts using each client's credential store. Two test mailboxes also synced,
+received, and sent mail through the macOS Mailspring preview using the file
+flow. The direct handoff has been checked with synthetic accounts. See the
+[Mailspring results](docs/validation/mailspring-preview.md) and
+[Thunderbird feasibility notes](docs/validation/thunderbird-feasibility.md)
+for the verified behavior and remaining work.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute. MailPort is
-licensed under [MIT](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute. MailPort source
+and the provisioning SDK are available under [MIT](LICENSE). The Vault app
+bundles the Gravatar Quick Editor under GPL-2.0-or-later. See the
+[desktop license notices](apps/vault/THIRD_PARTY_NOTICES.md#gravatar-quick-editor).

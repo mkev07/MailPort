@@ -45,10 +45,18 @@ index f614729..00bbc90 100644
    'initial-preferences': InitialPreferencesPage,
    'initial-subscription': InitialSubscriptionPage,
 diff --git a/app/internal_packages/onboarding/lib/onboarding-store.ts b/app/internal_packages/onboarding/lib/onboarding-store.ts
-index b42d208..5e6303e 100644
+index b42d208..86c09d1 100644
 --- a/app/internal_packages/onboarding/lib/onboarding-store.ts
 +++ b/app/internal_packages/onboarding/lib/onboarding-store.ts
-@@ -40,7 +40,10 @@ class OnboardingStore extends MailspringStore {
+@@ -17,6 +17,7 @@ class OnboardingStore extends MailspringStore {
+   _pageStack: string[];
+   // Cleared by any later setAccount, such as submitting the form or going back.
+   _confirmServers = false;
++  private mailPortLinkPending = false;
+   _rejectedCertificates: RejectedCertificate[] = [];
+ 
+   constructor() {
+@@ -40,7 +41,10 @@ class OnboardingStore extends MailspringStore {
        settings: {},
      });
  
@@ -60,6 +68,25 @@ index b42d208..5e6303e 100644
        // Used when re-adding an account after re-connecting, take the user back
        // to the best page with the most details
        this._account = new Account({}).fromJSON(existingAccountJSON);
+@@ -72,6 +76,18 @@ class OnboardingStore extends MailspringStore {
+       // Standard new user onboarding flow.
+       this._pageStack = ['welcome'];
+     }
++    if (AppEnv.config.isMailPortPreview()) {
++      ipcRenderer.on('mailport-link-invitation', () => {
++        this.mailPortLinkPending = true;
++        if (this.page() !== 'mailport-import') this._onMoveToPage('mailport-import');
++      });
++    }
++  }
++
++  takeMailPortLink() {
++    const pending = this.mailPortLinkPending;
++    this.mailPortLinkPending = false;
++    return pending;
+   }
+ 
+   _onOnboardingComplete = () => {
 diff --git a/app/internal_packages/onboarding/lib/page-account-choose.tsx b/app/internal_packages/onboarding/lib/page-account-choose.tsx
 index 988bd80..d0e7a34 100644
 --- a/app/internal_packages/onboarding/lib/page-account-choose.tsx
@@ -273,9 +300,7 @@ index edaad0a..a9cc631 100644
    options
      .alias('h', 'help')
      .boolean('h')
-@@ -349,6 +350,13 @@ const start = () => {
-   app.commandLine.appendSwitch('js-flags', '--harmony');
- 
+@@ -351,4 +352,11 @@ const start = () => {
    const options = parseCommandLine(process.argv);
 +  global.mailPortPreviewEnabled = Boolean(
 +    options.devMode &&
@@ -452,44 +477,102 @@ index 0000000..262d2a8
 +}
 diff --git a/app/internal_packages/onboarding/lib/page-mailport-import.tsx b/app/internal_packages/onboarding/lib/page-mailport-import.tsx
 new file mode 100644
-index 0000000..0fe258f
+index 0000000..db29442
 --- /dev/null
 +++ b/app/internal_packages/onboarding/lib/page-mailport-import.tsx
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,303 @@
 +import React from 'react';
 +import fs from 'fs';
++import net from 'net';
++import path from 'path';
++import { execFile } from 'child_process';
++import { promisify } from 'util';
 +import { ipcRenderer } from 'electron';
 +import { Account, AccountStore } from 'mailspring-exports';
 +import { idForAccount } from './onboarding-helpers';
 +import { createMailPortAdapter } from './mailport-adapter';
 +import * as OnboardingActions from './onboarding-actions';
++import OnboardingStore from './onboarding-store';
 +
 +// Local proof of concept: bundled from MailPort's reference SDK, not an upstream dependency.
 +const { ImportRequestSession, transferPackageCode } = require('./mailport-sdk.cjs');
 +const { app, dialog, getCurrentWindow } = require('@electron/remote');
++
++const run = promisify(execFile);
++const maxPackageSize = 4 * 1024 * 1024;
++
++async function openVault(signal: AbortSignal) {
++  await run('/usr/bin/open', ['-b', 'org.mailport.vault'], { signal });
++  const endpoint = path.join(app.getPath('home'), 'Library', 'Application Support', 'org.mailport.vault', 'direct-import.sock');
++  // LaunchServices can finish before MailPort's listener is ready.
++  for (let attempt = 0; attempt < 25; attempt++) {
++    if (signal.aborted) throw new Error('Import canceled');
++    try {
++      return await new Promise<net.Socket>((resolve, reject) => {
++        const socket = net.createConnection({ path: endpoint, signal });
++        socket.once('error', reject);
++        socket.once('connect', () => resolve(socket));
++      });
++    } catch (error) {
++      if (!['ENOENT', 'ECONNREFUSED'].includes((error as NodeJS.ErrnoException).code || '')) throw error;
++      await new Promise(resolve => setTimeout(resolve, 200));
++    }
++  }
++  throw new Error('MailPort listener unavailable');
++}
++
++async function receivePackage(socket: net.Socket, requestFile: string) {
++  const request = Buffer.from(requestFile, 'utf8');
++  const header = Buffer.alloc(4);
++  header.writeUInt32BE(request.length);
++  socket.setTimeout(15 * 60 * 1000, () => socket.destroy());
++  socket.write(Buffer.concat([header, request]));
++  let size = 0;
++  const chunks: Buffer[] = [];
++  for await (const chunk of socket) {
++    size += chunk.length;
++    if (size > maxPackageSize + 4) throw new Error('Response is too large');
++    chunks.push(chunk as Buffer);
++  }
++  if (!size) throw new Error('Request declined or expired');
++  const response = Buffer.concat(chunks);
++  if (size < 4 || response.readUInt32BE() !== size - 4) throw new Error('Incomplete transfer');
++  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(response.subarray(4));
++}
 +
 +type State = {
 +  requestCode: string;
 +  transferCode: string;
 +  message: string;
 +  busy: boolean;
++  directMode?: boolean;
++  enteredCode?: string;
++  directRetry?: boolean;
 +  completed: boolean;
++  signIns: string[];
 +};
 +
 +export default class MailPortImportPage extends React.Component<Record<string, never>, State> {
-+  state: State = { requestCode: '', transferCode: '', message: '', busy: false, completed: false };
++  state: State = { requestCode: '', transferCode: '', message: '', busy: false, completed: false, signIns: [] };
 +  private session: any;
 +  private serialized: string | null = null;
 +  private alive = true;
 +  private wasFirstAccount = false;
 +  private abort = new AbortController();
++  private pendingSignIns = new Map<string, string>();
 +  private adapter = createMailPortAdapter({
 +    makeAccount: (data) => new Account(data),
 +    save: (account: Account) => AppEnv.config.importMailPortAccount(JSON.stringify(account.toJSON())),
 +    idForAccount,
 +  });
 +
++  componentDidMount() {
++    ipcRenderer.on('mailport-link-invitation', this.startLinkedImport);
++    this.startLinkedImport();
++  }
++
 +  componentWillUnmount() {
++    ipcRenderer.removeListener('mailport-link-invitation', this.startLinkedImport);
 +    this.alive = false;
 +    this.abort.abort();
 +    this.serialized = null;
@@ -501,7 +584,10 @@ index 0000000..0fe258f
 +  }
 +
 +  private start = async () => {
-+    this.update({ busy: true, message: '' });
++    this.session?.close();
++    this.session = null;
++    this.serialized = null;
++    this.update({ busy: true, directMode: false, directRetry: false, message: '' });
 +    let session: any;
 +    try {
 +      const result = await dialog.showSaveDialog(getCurrentWindow(), {
@@ -513,6 +599,7 @@ index 0000000..0fe258f
 +      session = await ImportRequestSession.create('Mailspring');
 +      await fs.promises.writeFile(result.filePath, session.requestFile, { flag: 'wx', mode: 0o600 });
 +      if (!this.alive) { session.close(); return; }
++      this.pendingSignIns.clear();
 +      this.session = session;
 +      this.wasFirstAccount = AccountStore.accounts().length === 0;
 +      this.update({ requestCode: session.verificationCode, message: 'Open this request in MailPort and compare the request code. This request expires in 15 minutes.' });
@@ -520,6 +607,52 @@ index 0000000..0fe258f
 +      if (session) session.close();
 +      this.update({ message: 'Could not create the request. Choose a new filename and try again.' });
 +    } finally {
++      this.update({ busy: false });
++    }
++  };
++
++  private startLinkedImport = () => {
++    if (!this.state.busy && OnboardingStore.takeMailPortLink()) {
++      this.update({ completed: false, signIns: [] });
++      void this.startDirect();
++    }
++  };
++
++  private startDirect = async () => {
++    this.update({ busy: true, directMode: true, directRetry: false, enteredCode: '', requestCode: '', transferCode: '', message: 'Opening MailPort…' });
++    this.session?.close();
++    this.session = null;
++    this.serialized = null;
++    let socket: net.Socket | undefined;
++    let waitingForApproval = false;
++    try {
++      socket = await openVault(this.abort.signal);
++      this.pendingSignIns.clear();
++      this.wasFirstAccount = AccountStore.accounts().length === 0;
++      this.session = await ImportRequestSession.create('Mailspring');
++      waitingForApproval = true;
++      this.update({
++        requestCode: this.session.verificationCode,
++        message: 'Enter this request code in MailPort before approving the accounts.',
++      });
++      const serialized = await receivePackage(socket, this.session.requestFile);
++      if (!this.alive) return;
++      this.serialized = serialized;
++      this.update({
++        transferCode: transferPackageCode(serialized),
++        message: 'Enter the transfer code shown in MailPort to finish importing.',
++      });
++    } catch {
++      this.update({ requestCode: '', transferCode: '', directMode: false, message: waitingForApproval
++        ? 'The direct transfer was interrupted, declined, or expired. Try again.'
++        : 'Could not open direct import. Check that the MailPort Mac preview is installed, or use an import file.' });
++    } finally {
++      socket?.destroy();
++      if (!this.alive || !this.serialized) {
++        this.session?.close();
++        this.session = null;
++        this.serialized = null;
++      }
 +      this.update({ busy: false });
 +    }
 +  };
@@ -559,22 +692,40 @@ index 0000000..0fe258f
 +    }
 +  };
 +
-+  private importAccounts = async () => {
++  private importAccounts = async (verifiedCode = this.state.transferCode, direct = false) => {
 +    if (!this.session || !this.serialized) return;
++    if (direct && verifiedCode !== this.state.transferCode) {
++      this.update({ message: 'That transfer code does not match. Check the code in MailPort and try again.' });
++      return;
++    }
 +    this.update({ busy: true, message: '' });
 +    try {
 +      const result = await this.session.importPackage({
 +        serialized: this.serialized,
-+        verifiedCode: this.state.transferCode,
++        verifiedCode,
 +        signal: this.abort.signal,
-+        adapter: this.adapter,
++        adapter: {
++          upsertAccount: async (account) => {
++            if (account.incoming.auth.type === 'oauth' || account.outgoing.auth.type === 'oauth') {
++              this.pendingSignIns.set(account.id, account.email);
++              return;
++            }
++            await this.adapter.upsertAccount(account);
++          },
++        },
 +      });
 +      const saved = result.results.filter((item: any) => item.status === 'configured').length;
-+      const failed = result.results.length - saved;
-+      this.update({ completed: result.completed, message: `${saved} account(s) saved in the local profile. ${failed ? `${failed} could not be imported. Check for existing accounts or credentials, or retry after resolving the storage problem. ` : ''}Mail server connections have not been verified.` });
++      const signIns = result.results
++        .filter((item: any) => item.status === 'needs-sign-in')
++        .map((item: any) => this.pendingSignIns.get(item.accountId)!);
++      const failed = result.results.length - saved - signIns.length;
++      this.update({ completed: result.completed, signIns, directRetry: direct && !result.completed, message: `${saved} account(s) saved in the local profile. ${failed ? `${failed} could not be imported. Check for existing accounts or credentials, or retry after resolving the storage problem. ` : ''}Mail server connections have not been verified.` });
 +      if (result.completed) this.serialized = null;
 +    } catch {
-+      this.update({ message: 'The transfer could not be imported. Check the code and request expiry.' });
++      if (direct) this.serialized = null;
++      this.update(direct
++        ? { directMode: false, directRetry: false, requestCode: '', transferCode: '', message: 'Mailspring could not import these accounts. Start a new request.' }
++        : { message: 'The transfer could not be imported. Check the code and request expiry.' });
 +    } finally {
 +      if (!this.alive && this.session) this.session.close();
 +      this.update({ busy: false });
@@ -582,22 +733,52 @@ index 0000000..0fe258f
 +  };
 +
 +  private finish = () => {
-+    if (this.wasFirstAccount) OnboardingActions.moveToPage('initial-preferences');
++    if (this.wasFirstAccount) OnboardingActions.moveToPage(
++      AccountStore.accounts().length ? 'initial-preferences' : 'account-choose'
++    );
 +    else ipcRenderer.send('account-setup-successful');
 +  };
 +
 +  render() {
-+    const { requestCode, transferCode, message, busy, completed } = this.state;
++    const { requestCode, transferCode, message, busy, completed, signIns, directMode, directRetry, enteredCode } = this.state;
 +    return (
 +      <div className="page account-setup">
 +        <h2>Import from MailPort</h2>
-+        <p>Preview: use synthetic accounts only. Password accounts are supported; provider sign-in must be set up separately.</p>
-+        {!requestCode && <button type="button" disabled={busy} onClick={this.start}>Create import request</button>}
-+        {!!requestCode && <p>Request code: <strong>{requestCode}</strong></p>}
-+        {!!requestCode && !completed && <button type="button" disabled={busy} onClick={this.choosePackage}>Open .mailport file</button>}
-+        {!!transferCode && !completed && <p>Transfer code: <strong>{transferCode}</strong></p>}
-+        {!!transferCode && !completed && <button type="button" disabled={busy} onClick={this.importAccounts}>Codes match · Import accounts</button>}
++        <p>Password accounts can be imported here. Accounts that use OAuth require provider sign-in in Mailspring.</p>
++        {process.platform === 'darwin' && !requestCode && !completed && (
++          <button type="button" disabled={busy} onClick={this.startDirect}>Open MailPort</button>
++        )}
++        {directRetry && (
++          <button type="button" disabled={busy} onClick={() => {
++            if (this.serialized) void this.importAccounts((enteredCode || '').trim().toUpperCase(), true);
++          }}>Retry incomplete imports</button>
++        )}
++        {!requestCode && !completed && !directMode && <button type="button" disabled={busy} onClick={this.start}>Create import request</button>}
++        {!!requestCode && (!directMode || !transferCode) && <p>Request code: <strong>{requestCode}</strong></p>}
++        {directMode && !!transferCode && !completed && !directRetry && (
++          <form onSubmit={event => {
++            event.preventDefault();
++            if (!busy) void this.importAccounts((enteredCode || '').trim().toUpperCase(), true);
++          }}>
++            <label>
++              Transfer code from MailPort
++              <input value={enteredCode || ''} maxLength={19} autoComplete="off" spellCheck={false}
++                onChange={event => this.update({ enteredCode: event.target.value })} />
++            </label>
++            <button type="submit" disabled={busy || (enteredCode || '').trim().length !== 19}>Import accounts</button>
++          </form>
++        )}
++        {!directMode && !!requestCode && !completed && <button type="button" disabled={busy} onClick={this.choosePackage}>Open .mailport file</button>}
++        {!directMode && !!transferCode && !completed && <p>Transfer code: <strong>{transferCode}</strong></p>}
++        {!directMode && !!transferCode && !completed && <button type="button" disabled={busy} onClick={() => this.importAccounts()}>Codes match · Import accounts</button>}
 +        {message && <p role="status">{message}</p>}
++        {signIns.length > 0 && (
++          <section aria-label="Sign in separately">
++            <h3>Sign in separately</h3>
++            <p>Use Mailspring’s Add Account to sign in to these accounts with their providers.</p>
++            <ul>{signIns.map((email, index) => <li key={index}>{email}</li>)}</ul>
++          </section>
++        )}
 +        {completed && <button type="button" onClick={this.finish}>Done</button>}
 +      </div>
 +    );
@@ -651,3 +832,94 @@ index 0000000..95511e4
 +  await assert.rejects(adapter.upsertAccount(sample()), /Synthetic write failed/);
 +  assert.equal(attempts, 1);
 +});
+diff --git a/app/src/browser/application.ts b/app/src/browser/application.ts
+index 39c1281..aa2a529 100644
+--- a/app/src/browser/application.ts
++++ b/app/src/browser/application.ts
+@@ -15,6 +15,7 @@ import {
+ } from 'electron';
+ 
+ import fs from 'fs';
++import net from 'net';
+ import url from 'url';
+ import path from 'path';
+ import proc from 'child_process';
+@@ -204,6 +205,9 @@ export default class Application extends EventEmitter {
+     }
+ 
+     this.handleEvents();
++    if (process.platform === 'darwin' && this.configPersistenceManager.isMailPortPreview()) {
++      this.startMailPortLink();
++    }
+ 
+     // Mark initialization complete, then process the initial launch options
+     // followed by any second-instance options that arrived while we were
+@@ -225,6 +229,68 @@ export default class Application extends EventEmitter {
+     }
+   }
+ 
++  private startMailPortLink() {
++    const directory = path.join(app.getPath('home'), 'Library', 'Application Support', 'org.mailport.vault');
++    const endpoint = path.join(directory, 'mailspring-link.sock');
++    const invitation = Buffer.from('mailport-link-v1\n');
++    try {
++      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
++      const stat = fs.lstatSync(directory);
++      if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077)) return;
++    } catch {
++      return;
++    }
++    const listener = net.createServer(socket => {
++      let received = Buffer.alloc(0);
++      socket.setTimeout(1000, () => socket.destroy());
++      socket.on('error', () => socket.destroy());
++      socket.on('data', chunk => {
++        if (received.length + chunk.length > invitation.length) return socket.destroy();
++        received = Buffer.concat([received, chunk]);
++        if (received.length < invitation.length) return;
++        if (!received.equals(invitation)) return socket.destroy();
++
++        const key = WindowManager.ONBOARDING_WINDOW;
++        this.windowManager.ensureWindow(key, {
++          title: localized('Add Account'),
++          windowProps: { addingAccount: true },
++        });
++        this.windowManager.get(key)?.sendMessage('mailport-link-invitation');
++        socket.end('ready\n');
++      });
++    });
++    listener.maxConnections = 4;
++    listener.on('error', error => {
++      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') return;
++      // Node removes the socket on normal close. Recover only our own stale
++      // socket after a failed connection and an unchanged inode check.
++      let inode: number;
++      try {
++        const current = fs.lstatSync(endpoint);
++        if (!current.isSocket() || current.uid !== process.getuid()) return;
++        inode = current.ino;
++      } catch { return; }
++      const probe = net.createConnection(endpoint);
++      probe.setTimeout(1000, () => probe.destroy());
++      probe.once('connect', () => probe.destroy());
++      probe.once('error', probeError => {
++        if ((probeError as NodeJS.ErrnoException).code !== 'ECONNREFUSED') return;
++        try {
++          const current = fs.lstatSync(endpoint);
++          if (!current.isSocket() || current.uid !== process.getuid() || current.ino !== inode) return;
++          fs.unlinkSync(endpoint);
++          listener.listen(endpoint);
++        } catch { /* Another preview won the socket. */ }
++      });
++    });
++    listener.on('listening', () => {
++      try { fs.chmodSync(endpoint, 0o600); } catch { listener.close(); }
++    });
++    listener.listen(endpoint);
++    listener.unref();
++    app.once('before-quit', () => { if (listener.listening) listener.close(); });
++  }
++
+   getMainWindow() {
+     const win = this.windowManager.get(WindowManager.MAIN_WINDOW);
+     return win ? win.browserWindow : null;
