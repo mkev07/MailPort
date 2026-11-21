@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { GravatarQuickEditorCore } from "@gravatar-com/quick-editor";
 
 const shifts = [
   7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5,
@@ -78,43 +80,98 @@ function md5(bytes: Uint8Array) {
   );
 }
 
+function avatarHash(email: string) {
+  return md5(new TextEncoder().encode(email.trim().toLowerCase()));
+}
+
 export function EmailAvatar({
   email,
   lookup,
+  fallbackName,
   className = "email-editor-avatar",
 }: {
   email: string;
   lookup: boolean;
+  fallbackName?: string;
   className?: string;
 }) {
-  const [image, setImage] = useState<string>();
+  const hash = useMemo(() => email ? avatarHash(email) : "", [email]);
+  const subscribe = useCallback((notify: () => void) => {
+    avatarUpdates.addEventListener(hash, notify);
+    return () => avatarUpdates.removeEventListener(hash, notify);
+  }, [hash]);
+  const getPhoto = () => lookup ? decodedAvatars.get(hash) : undefined;
+  const photo = useSyncExternalStore(subscribe, getPhoto, () => undefined);
+
   useEffect(() => {
-    if (!lookup || !email) return;
-    let current = true;
-    const timer = window.setTimeout(() => {
-      const normalized = new TextEncoder().encode(email.trim().toLowerCase());
-      const hash = md5(normalized);
-      if (!current) return;
-      setImage(`https://www.gravatar.com/avatar/${hash}?s=128&d=404`);
-    }, 400);
-    return () => {
-      current = false;
-      window.clearTimeout(timer);
-    };
-  }, [email, lookup]);
+    if (!lookup || !hash || decodedAvatars.has(hash)) return;
+    const timer = window.setTimeout(() => loadAvatar(hash), 400);
+    return () => window.clearTimeout(timer);
+  }, [hash, lookup]);
 
   return (
     <span className={className} aria-hidden="true">
-      {image ? (
-        <img
-          src={image}
-          alt=""
-          referrerPolicy="no-referrer"
-          onError={() => setImage(undefined)}
-        />
+      {photo ? (
+        <img src={photo.src} alt="" referrerPolicy="no-referrer" />
       ) : (
-        Array.from(email.trim())[0]?.toLocaleUpperCase() || "@"
+        Array.from(fallbackName?.trim() || email.trim())[0]?.toLocaleUpperCase() || "@"
       )}
     </span>
   );
+}
+
+const decodedAvatars = new Map<string, HTMLImageElement | null>();
+const pendingAvatars = new Map<string, Promise<void>>();
+const avatarUpdates = new EventTarget();
+
+function loadAvatar(hash: string, refresh = false) {
+  if (!refresh && (decodedAvatars.has(hash) || pendingAvatars.has(hash))) return;
+  const request = invoke<string | null>("vault_avatar", { hash, refresh })
+    .then(async (src) => {
+      const photo = src ? new Image() : null;
+      if (photo && src) {
+        photo.src = src;
+        await photo.decode();
+      }
+      if (pendingAvatars.get(hash) !== request) return;
+      decodedAvatars.set(hash, photo);
+      avatarUpdates.dispatchEvent(new Event(hash));
+    })
+    .catch(() => {})
+    .finally(() => {
+      if (pendingAvatars.get(hash) === request) pendingAvatars.delete(hash);
+    });
+  pendingAvatars.set(hash, request);
+}
+
+export function clearCachedEmailAvatars() {
+  const hashes = [...decodedAvatars.keys()];
+  decodedAvatars.clear();
+  pendingAvatars.clear();
+  for (const hash of hashes) avatarUpdates.dispatchEvent(new Event(hash));
+}
+
+// Only accept avatar updates from the opened Gravatar editor.
+class VaultGravatarEditor extends GravatarQuickEditorCore {
+  override _onMessage(event: MessageEvent) {
+    if (event.origin === "https://gravatar.com" && event.source === this._window &&
+      event.data?.type === "avatar_updated") {
+      super._onMessage(event);
+    }
+  }
+}
+
+let editor: VaultGravatarEditor | undefined;
+let editingHash = "";
+
+export function openGravatarEditor(email: string) {
+  if (editor?.isOpen()) return false;
+  editor ??= new VaultGravatarEditor({
+    scope: ["avatars"],
+    onProfileUpdated: () => {
+      loadAvatar(editingHash, true);
+    },
+  });
+  editingHash = avatarHash(email);
+  return editor.open(email.trim());
 }

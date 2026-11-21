@@ -13,9 +13,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LoadingLabel } from "./components/LoadingLabel";
 import { DeleteDropDots } from "./components/DeleteDropDots";
-import { EmailAvatar } from "./components/EmailAvatar";
-import { CheckCircle } from "./shared/ui/icons";
+import { EmailAvatar, openGravatarEditor } from "./components/EmailAvatar";
+import { CheckCircle, Eye, EyeOff, RefreshCw, Trash2 } from "./shared/ui/icons";
 import { tintChannels } from "./features/settings/model/tint";
+import { readFlag, writeFlag } from "./features/settings/model/storageFlags";
+import { CacheSettings } from "./features/settings/CacheSettings";
 import { useAccountDrag } from "./useAccountDrag";
 import { useNativeButtonGlass } from "./useNativeButtonGlass";
 import {
@@ -99,6 +101,15 @@ const securityLabels: Record<Connection["security"], string> = {
 function securityLabel(security: Connection["security"]) {
   return securityLabels[security] ?? security.toUpperCase();
 }
+function maskPrivateText(value: string): string {
+  return value.split("@").map((part) => {
+    const characters = Array.from(part);
+    if (!characters.length) return "";
+    return characters.length < 4
+      ? "•".repeat(characters.length)
+      : `${characters[0]}${"•".repeat(characters.length - 2)}${characters.at(-1)}`;
+  }).join("@");
+}
 function Icon({
   name,
   size = 20,
@@ -106,6 +117,7 @@ function Icon({
   name:
     | "mail"
     | "lock"
+    | "unlock"
     | "plus"
     | "arrow"
     | "shield"
@@ -133,6 +145,12 @@ function Icon({
       <>
         <rect x="5" y="10" width="14" height="11" rx="3" />
         <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2" />
+      </>
+    ),
+    unlock: (
+      <>
+        <rect x="5" y="10" width="14" height="11" rx="3" />
+        <path d="M8 10V7a4 4 0 0 1 8 0m-4 8v2" />
       </>
     ),
     plus: <path d="M12 5v14M5 12h14" />,
@@ -197,13 +215,13 @@ function Icon({
 function AccountProfilePicker({
   profiles,
   profileId,
-  email,
+  accountAvatar,
   disabled,
   onChoose,
 }: {
   profiles: Profile[];
   profileId: string | null;
-  email: string;
+  accountAvatar: ReactNode;
   disabled: boolean;
   onChoose: (id: string | null) => void;
 }) {
@@ -264,11 +282,7 @@ function AccountProfilePicker({
         disabled={disabled}
         onClick={() => setOpen(!open)}
       >
-        <EmailAvatar
-          email={email}
-          lookup
-          className="account-card-email-avatar"
-        />
+        {accountAvatar}
         {current && (
           <span
             className="account-profile-dot"
@@ -339,17 +353,53 @@ function Modal({
         <h2 id="dialog-title">{title}</h2>
         <button
           type="button"
-          className="icon-button"
+          className="icon-button action-reveal"
           aria-label="Close dialog"
           onClick={onClose}
         >
           <Icon name="close" />
+          <ActionLabel><Icon name="close" size={16} /> Close</ActionLabel>
         </button>
       </div>
       {children}
     </dialog>
   );
 }
+type DirectImportRequest = {
+  id: string;
+  accounts: [id: string, email: string][];
+  receiverVerified: boolean;
+};
+
+function useDirectImportRequest(ready: boolean) {
+  const [request, setRequest] = useState<DirectImportRequest | null>(null);
+  useEffect(() => {
+    if (!ready) return;
+    let current = true;
+    let pending = false;
+    function check() {
+      if (pending) return;
+      pending = true;
+      void invoke<DirectImportRequest | null>("vault_direct_request").then((next) => {
+        if (current) setRequest(next);
+      }).catch(() => {}).finally(() => { pending = false; });
+    }
+    check();
+    const timer = window.setInterval(check, 750);
+    window.addEventListener("focus", check);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, [ready]);
+  return ready ? request : null;
+}
+
+function ActionLabel({ children }: { children: ReactNode }) {
+  return <span className="action-reveal-label" aria-hidden="true">{children}</span>;
+}
+
 function Field({
   label,
   children,
@@ -548,11 +598,11 @@ function PortFields({
 function LoginFields({
   auth,
   onChange,
-  editing = false,
+  hasSavedPassword = false,
 }: {
   auth: Auth;
   onChange: (auth: Auth) => void;
-  editing?: boolean;
+  hasSavedPassword?: boolean;
 }) {
   return (
     <>
@@ -574,13 +624,14 @@ function LoginFields({
       {auth.type === "password" ? (
         <Field
           label="Password or app password"
-          hint={editing ? "Leave blank to keep the saved password." : undefined}
+          hint={hasSavedPassword ? "Leave blank to keep the saved password." : undefined}
         >
           <input
             type="password"
             autoComplete="new-password"
             value={auth.password}
-            required={!editing}
+            placeholder={hasSavedPassword ? "••••••••" : undefined}
+            required={!hasSavedPassword}
             onChange={(event) =>
               onChange({ type: "password", password: event.target.value })
             }
@@ -606,14 +657,14 @@ function LoginFields({
 function ServerFields({
   outgoing = false,
   server,
-  editing,
+  hasSavedPassword,
   separate,
   sameHost,
   onChange,
 }: {
   outgoing?: boolean;
   server: Server;
-  editing: boolean;
+  hasSavedPassword: boolean;
   separate: boolean;
   sameHost?: boolean;
   onChange: (server: Server) => void;
@@ -649,7 +700,7 @@ function ServerFields({
             </Field>
             <LoginFields
               auth={server.auth}
-              editing={editing}
+              hasSavedPassword={hasSavedPassword}
               onChange={(auth) => onChange({ ...server, auth })}
             />
           </>
@@ -677,16 +728,26 @@ function editorActionPosition(x: number, y: number, source: DOMRect) {
   };
 }
 
+function isInsideAccountEditor(x: number, y: number) {
+  const editor = document.querySelector(".inline-editor");
+  const frame = editor?.getBoundingClientRect();
+  const column = editor?.querySelector(".editor-actions")?.getBoundingClientRect();
+  return frame && column && x >= column.left && x <= column.right &&
+    y >= frame.top && y <= frame.bottom;
+}
+
 function AccountForm({
   initial,
   busy,
   error,
+  privateView,
   onSave,
   onCancel,
 }: {
   initial: Account;
   busy: boolean;
   error: string;
+  privateView: boolean;
   onSave: (account: Account) => void;
   onCancel: () => void;
 }) {
@@ -717,6 +778,10 @@ function AccountForm({
     "idle" | "loading" | "found" | "partial" | "missing" | "failed"
   >("idle");
   const [retry, setRetry] = useState(0);
+  const [editRefresh, setEditRefresh] = useState<{
+    incoming: string;
+    outgoing: string;
+  }>();
   const applied = useRef<Discovery | null>(null);
   const manualPorts = useRef({ incoming: false, outgoing: false });
   const manualAuth = useRef(false);
@@ -738,16 +803,34 @@ function AccountForm({
   };
 
   useEffect(() => {
-    if (initial.id || !domain) return;
+    if (!domain || (initial.id && !editRefresh)) return;
     let current = true;
     const timer = window.setTimeout(() => {
       setLookup("loading");
       void invoke<Discovery>("discover_mail_servers", { domain })
         .then((result) => {
           if (!current || latestDomain.current !== domain) return;
+          const outcome = result.incoming && result.outgoing
+            ? "found"
+            : result.incoming || result.outgoing ? "partial" : "missing";
+          setLookup(outcome);
+          if (editRefresh) {
+            const updateHost = (key: "incoming" | "outgoing", server: Server) => {
+              const detected = result[key];
+              return detected && server.host === editRefresh[key]
+                ? { ...server, host: detected.host }
+                : server;
+            };
+            setDraft((value) => ({
+              ...value,
+              incoming: updateHost("incoming", value.incoming),
+              outgoing: updateHost("outgoing", value.outgoing),
+            }));
+            return;
+          }
           applied.current = result;
-          if (!manualSameHost.current && result.outgoing) {
-            setSameHost(result.incoming?.host === result.outgoing.host);
+          if (!manualSameHost.current && (result.incoming || result.outgoing)) {
+            setSameHost(Boolean(result.outgoing && result.incoming?.host === result.outgoing.host));
           }
           const keepPorts = { ...manualPorts.current };
           const fill = (
@@ -784,13 +867,6 @@ function AccountForm({
               },
             }));
           }
-          setLookup(
-            result.incoming && result.outgoing
-              ? "found"
-              : result.incoming || result.outgoing
-                ? "partial"
-                : "missing",
-          );
           if (result.incoming && result.outgoing) {
             toast.success("Mail server settings found.");
           }
@@ -802,12 +878,12 @@ function AccountForm({
             setAdvanced(true);
           }
         });
-    }, 500);
+    }, editRefresh ? 0 : 500);
     return () => {
       current = false;
       clearTimeout(timer);
     };
-  }, [domain, initial.id, retry]);
+  }, [domain, initial.id, retry, editRefresh]);
 
   const changeEmail = (email: string) => {
     latestDomain.current = emailDomain(email);
@@ -839,6 +915,7 @@ function AccountForm({
       };
     };
     if (changedDomain) {
+      setEditRefresh(undefined);
       setLookup("idle");
       if (!manualSameHost.current) setSameHost(true);
       applied.current = null;
@@ -880,6 +957,15 @@ function AccountForm({
       outgoing: { ...draft.outgoing, ...login, host: outgoingHost.trim() },
     };
   };
+  const refreshingHostnames = Boolean(initial.id && lookup === "loading");
+  const refreshMessage = {
+    idle: "",
+    loading: "Looking up mail server hostnames…",
+    found: "Lookup complete. Review both hostnames before saving.",
+    partial: "Found one hostname. Review both before saving.",
+    missing: "No hostnames found. Your current settings are still in the draft.",
+    failed: "Couldn’t look up hostnames. Try again.",
+  }[lookup];
   const pending = accountToSave();
   const serverChanged = (original: Server, updated: Server) =>
     original.host !== updated.host ||
@@ -898,13 +984,15 @@ function AccountForm({
     serverChanged(initial.outgoing, pending.outgoing);
 
   useEffect(() => {
-    if (busy || outsideAction) return;
+    if (busy || outsideAction || privateView) return;
     const showAction = (event: MouseEvent) => {
       if (
         event.button !== 0 ||
         !(event.target instanceof Element) ||
         !event.target.closest(".vault-main") ||
-        event.target.closest(".inline-editor, .profile-theme-switch")
+        event.target.closest(".profile-theme-switch") ||
+        (event.detail === 0 && event.target.closest(".inline-editor")) ||
+        isInsideAccountEditor(event.clientX, event.clientY)
       ) return;
 
       const cancel = cancelButton.current?.getBoundingClientRect();
@@ -930,10 +1018,11 @@ function AccountForm({
     };
     document.addEventListener("click", showAction, true);
     return () => document.removeEventListener("click", showAction, true);
-  }, [busy, dirty, outsideAction]);
+  }, [busy, dirty, outsideAction, privateView]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (busy || refreshingHostnames) return;
     if (!hasServers) {
       setAdvanced(true);
       return;
@@ -942,7 +1031,7 @@ function AccountForm({
   };
 
   return (
-    <form className="account-editor-form" onSubmit={submit}>
+    <form className="account-editor-form" hidden={privateView} onSubmit={submit}>
       <div className="account-editor-fields">
         <div className="detail-heading">
           <h2 id="editor-heading" tabIndex={-1}>
@@ -951,11 +1040,26 @@ function AccountForm({
         </div>
         <fieldset disabled={busy}>
           <div className="detail-section editor-identity">
-            <EmailAvatar
-              key={draft.email}
-              email={draft.email}
-              lookup={Boolean(domain)}
-            />
+            <div className="editor-avatar-actions">
+              <EmailAvatar
+                key={draft.email}
+                email={draft.email}
+                lookup={Boolean(domain)}
+              />
+              {domain && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    if (!openGravatarEditor(draft.email)) {
+                      toast.error("Could not open the Gravatar editor.");
+                    }
+                  }}
+                >
+                  Edit Gravatar photo
+                </button>
+              )}
+            </div>
             <div className="form-grid account-basics">
               <Field label="Email address">
                 <div className="discovery-email-field" data-found={lookup === "found" || undefined}>
@@ -1003,17 +1107,37 @@ function AccountForm({
             )}
           </div>
           <div className="detail-section">
-            <div className="server-options">
+            <div className={initial.id ? "server-options action-pair" : "server-options"}>
               <button
-                className="secondary"
+                className={initial.id ? "secondary action-reveal" : "secondary"}
+                data-action-expanded={initial.id ? "" : undefined}
                 type="button"
+                aria-label="Server settings"
                 aria-expanded={advanced}
                 aria-controls="server-settings"
                 onClick={() => setAdvanced(!advanced)}
               >
                 <span className="disclosure-chevron" aria-hidden="true" />
-                Server settings
+                {initial.id ? (
+                  <ActionLabel><span className="disclosure-chevron" /> Server settings</ActionLabel>
+                ) : "Server settings"}
               </button>
+              {initial.id && (
+                <button
+                  className="secondary icon-button action-reveal"
+                  type="button"
+                  aria-label="Refresh mail server hostnames"
+                  title="Refresh mail server hostnames"
+                  disabled={!domain || busy || refreshingHostnames}
+                  onClick={() => {
+                    setLookup("loading");
+                    setEditRefresh({ incoming: draft.incoming.host, outgoing: draft.outgoing.host });
+                  }}
+                >
+                  {refreshingHostnames ? <LoadingLabel>{null}</LoadingLabel> : <RefreshCw size={16} />}
+                  <ActionLabel><RefreshCw size={16} /> Refresh</ActionLabel>
+                </button>
+              )}
               {!initial.id &&
                 domain &&
                 (lookup === "failed" ||
@@ -1028,6 +1152,9 @@ function AccountForm({
                   </button>
                 )}
             </div>
+            {initial.id && (
+              <p className="server-refresh-status" role="status">{refreshMessage}</p>
+            )}
             {!advanced && hasServers && (
               <dl className="server-summary">
                 <div>
@@ -1099,7 +1226,7 @@ function AccountForm({
                   )}
                   <ServerFields
                     server={draft.incoming}
-                    editing={!!initial.id}
+                    hasSavedPassword={Boolean(initial.id && initial.incoming.auth.type === "password")}
                     separate={separate}
                     onChange={(incoming) =>
                       changeServerSettings("incoming", incoming)
@@ -1108,7 +1235,7 @@ function AccountForm({
                   <ServerFields
                     outgoing
                     server={draft.outgoing}
-                    editing={!!initial.id}
+                    hasSavedPassword={Boolean(initial.id && initial.outgoing.auth.type === "password")}
                     separate={separate}
                     sameHost={sameHost}
                     onChange={(outgoing) =>
@@ -1140,7 +1267,7 @@ function AccountForm({
           ref={saveButton}
           className="primary"
           type="submit"
-          disabled={busy}
+          disabled={busy || refreshingHostnames}
           onClick={() => {
             if (!hasServers || separate) setAdvanced(true);
           }}
@@ -1148,7 +1275,7 @@ function AccountForm({
           {busy ? <LoadingLabel>Saving…</LoadingLabel> : "Save account"}
         </button>
       </div>
-      {outsideAction && createPortal(
+      {outsideAction && !privateView && createPortal(
         <div
           className="editor-outside-backdrop"
           role="dialog"
@@ -1165,9 +1292,7 @@ function AccountForm({
               themeSwitch.click();
               return;
             }
-            const editor = document.querySelector(".inline-editor")?.getBoundingClientRect();
-            if (editor && clientX >= editor.left && clientX <= editor.right &&
-                clientY >= editor.top && clientY <= editor.bottom) {
+            if (isInsideAccountEditor(clientX, clientY)) {
               dismissOutsideAction();
               return;
             }
@@ -1217,6 +1342,7 @@ function AccountForm({
                 autoFocus
                 type="button"
                 className="editor-outside-button primary"
+                disabled={refreshingHostnames}
                 style={{ width: outsideAction.saveWidth }}
                 onClick={() => {
                   dismissOutsideAction();
@@ -1421,19 +1547,49 @@ function AccountServer({
 function AccountDetailCard({
   account,
   profiles,
+  privateView,
+  maskPhotos,
   busy,
   selected,
   onEdit,
+  onDelete,
   onChooseProfile,
 }: {
   account: Summary;
   profiles: Profile[];
+  privateView: boolean;
+  maskPhotos: boolean;
   busy: boolean;
   selected: boolean;
   onEdit: () => void;
+  onDelete: () => void;
   onChooseProfile: (profileId: string | null) => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (privateView) setConfirming(false);
+  }, [privateView]);
+  const deleteButton = useRef<HTMLButtonElement>(null);
+  const cancelDeleteButton = useRef<HTMLButtonElement>(null);
+  const showConfirmation = confirming && !privateView;
+  useEffect(() => {
+    if (showConfirmation) cancelDeleteButton.current?.focus();
+  }, [showConfirmation]);
+  const cancelDelete = () => {
+    deleteButton.current?.focus();
+    setConfirming(false);
+  };
   const headingId = `account-card-heading-${account.id}`;
+  const email = privateView ? maskPrivateText(account.email) : account.email;
+  const avatar = (
+    <EmailAvatar
+      key={account.email}
+      email={account.email}
+      lookup={!maskPhotos}
+      fallbackName={account.displayName || email}
+      className="account-card-email-avatar"
+    />
+  );
   return (
     <article
       className="account-card"
@@ -1446,28 +1602,87 @@ function AccountDetailCard({
             key={account.id}
             profiles={profiles}
             profileId={account.profileId}
-            email={account.email}
+            accountAvatar={avatar}
             disabled={busy}
             onChoose={onChooseProfile}
           />
         ) : (
-          <span className="profile-avatar account-card-avatar" aria-hidden="true">
-            <Icon name="mail" size={24} />
-          </span>
+          <div className="account-card-avatar">{avatar}</div>
         )}
         <div className="account-card-identity">
-          <h2 id={headingId}>{account.displayName || account.email}</h2>
-          {account.displayName && <p>{account.email}</p>}
+          <h2 id={headingId}>{account.displayName || email}</h2>
+          {account.displayName && <p>{email}</p>}
         </div>
-        <button
-          className="secondary account-card-edit"
-          data-edit-id={account.id}
-          data-control-glass
-          disabled={busy}
-          onClick={onEdit}
+        <div
+          className="account-card-actions action-pair"
+          data-confirming={showConfirmation ? "" : undefined}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setConfirming(false);
+          }}
+          onKeyDown={(event) => {
+            if (event.repeat && event.key === "Enter") event.preventDefault();
+            if (event.key === "Escape" && confirming) {
+              event.preventDefault();
+              event.stopPropagation();
+              cancelDelete();
+            }
+          }}
         >
-          <Icon name="edit" size={16} /> Edit
-        </button>
+          {showConfirmation ? (
+            <button
+              key="cancel"
+              ref={cancelDeleteButton}
+              className="secondary icon-button action-reveal action-cancel"
+              type="button"
+              disabled={busy}
+              aria-label="Cancel deletion"
+              title="Cancel deletion"
+              onClick={cancelDelete}
+            >
+              <Icon name="close" size={16} />
+              <ActionLabel><Icon name="close" size={16} /> Cancel</ActionLabel>
+            </button>
+          ) : (
+            <button
+              key="edit"
+              className="secondary action-reveal"
+              data-action-expanded=""
+              type="button"
+              aria-label="Edit account"
+              data-edit-id={account.id}
+              data-control-glass
+              disabled={busy || privateView}
+              onClick={onEdit}
+            >
+              <Icon name="edit" size={16} />
+              <ActionLabel><Icon name="edit" size={16} /> Edit</ActionLabel>
+            </button>
+          )}
+          <button
+            ref={deleteButton}
+            className={showConfirmation
+              ? "secondary danger-button action-reveal"
+              : "secondary icon-button action-reveal account-card-delete-trigger"}
+            data-action-expanded={showConfirmation ? "" : undefined}
+            type="button"
+            disabled={busy || privateView}
+            aria-label={showConfirmation ? "Confirm delete account" : "Delete account"}
+            title={showConfirmation ? "Delete account from MailPort" : "Delete account"}
+            onClick={(event) => {
+              if (event.detail > 1) return;
+              if (confirming) {
+                setConfirming(false);
+                onDelete();
+              } else {
+                event.currentTarget.focus();
+                setConfirming(true);
+              }
+            }}
+          >
+            <Trash2 size={16} />
+            <ActionLabel><Trash2 size={16} /> {showConfirmation ? "Confirm delete" : "Delete"}</ActionLabel>
+          </button>
+        </div>
       </header>
       <div className="account-card-servers">
         <AccountServer protocol="IMAP" label="Incoming" server={account.incoming} />
@@ -1490,8 +1705,59 @@ function AccountDetailCard({
   );
 }
 
+function AccountPassportCard({
+  account,
+  active,
+  privateView,
+  maskPhotos,
+  onOpen,
+}: {
+  account: Summary;
+  active: boolean;
+  privateView: boolean;
+  maskPhotos: boolean;
+  onOpen: () => void;
+}) {
+  const email = privateView ? maskPrivateText(account.email) : account.email;
+  const name = account.displayName || email;
+  return (
+    <button
+      type="button"
+      className="account-passport"
+      aria-label={`Show details for ${name}`}
+      aria-current={active ? "true" : undefined}
+      onClick={onOpen}
+    >
+      <img className="account-passport-logo" src="/mailport-logo.png" alt="" width={24} height={26} draggable={false} />
+      <span className="account-passport-details">
+        <EmailAvatar
+          email={account.email}
+          lookup={!maskPhotos}
+          fallbackName={name}
+          className="account-passport-avatar"
+        />
+        <span className="account-passport-identity">
+          <strong>{name}</strong>
+          {account.displayName && <span>{email}</span>}
+        </span>
+      </span>
+      <span className="account-passport-check" aria-hidden="true">
+        <Icon name="check" size={12} />
+      </span>
+    </button>
+  );
+}
+
 export default function App() {
   const [light, setLight] = useState(isLightScheme);
+  const [privateView, setPrivateView] = useState(false);
+  const [hideNames, setHideNames] = useState(() => readFlag("mailport.privacy.hideNames") ?? false);
+  const [hidePhotos, setHidePhotos] = useState(() => readFlag("mailport.privacy.hidePhotos") ?? true);
+  const maskPhotos = privateView && hidePhotos;
+  const displayPrivate = privateView ? maskPrivateText : (value: string) => value;
+  const displayError = (message: string) => privateView
+    ? "The operation failed. Show private details to see the error."
+    : message;
   const [buttonPalette, setButtonPalette] = useState(loadButtonPalette);
   const buttonTheme = light ? "light" : "dark";
   const activePalette = useMemo(
@@ -1593,6 +1859,31 @@ export default function App() {
   const [activeProfileId, setActiveProfileId] = useState<string>();
   const [profilesCollapsed, setProfilesCollapsed] = useState(true);
   const [exportCollapsed, setExportCollapsed] = useState(false);
+  const [linkPane, setLinkPane] = useState(false);
+  const [directRequestCode, setDirectRequestCode] = useState("");
+  const [directReceipt, setDirectReceipt] = useState<{ code: string; count: number } | null>(null);
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState("");
+  const isMac = document.documentElement.classList.contains("is-mac");
+  const directRequest = useDirectImportRequest(isMac && Boolean(status?.unlocked) && !privateView);
+  const directRequestId = directRequest?.id;
+  useEffect(() => {
+    if (!directRequestId) return;
+    setExportCollapsed(false);
+    setLinkPane(false);
+    setDirectRequestCode("");
+    setDirectReceipt(null);
+    setTransferError("");
+  }, [directRequestId]);
+  useEffect(() => {
+    if (!status?.unlocked || privateView) {
+      setLinkPane(false);
+      setDirectRequestCode("");
+      setDirectReceipt(null);
+      setLinkError("");
+    }
+  }, [status?.unlocked, privateView]);
+
   const [modalError, setModalError] = useState("");
   const returnFocus = useRef<string | null>(null);
   useEffect(() => {
@@ -1649,6 +1940,8 @@ export default function App() {
     setStatus(next);
     if (!next.unlocked) {
       setAutoLock(null);
+      setAutoLockHover(false);
+      setAutoLockFocus(false);
       toast.dismiss();
       setUnlockSettings(false);
       setActiveId(undefined);
@@ -1722,7 +2015,6 @@ export default function App() {
     }
   };
   const editing = editor !== null;
-  const isMac = document.documentElement.classList.contains("is-mac");
   useEffect(() => {
     if (unlockSettings)
       document.getElementById("quick-unlock-heading")?.focus();
@@ -1912,14 +2204,34 @@ export default function App() {
     }, setTransferError).finally(() => setTransferAction(undefined));
   };
   const savedAccounts = status?.unlocked ? status.accounts : [];
-  const allAccounts = pendingMove
-    ? savedAccounts.map((account) =>
-        account.id === pendingMove.accountId
-          ? { ...account, profileId: pendingMove.profileId }
-          : account,
-      )
-    : savedAccounts;
-  const profiles = status?.unlocked ? status.profiles : [];
+  const allAccounts = !privateView && !pendingMove ? savedAccounts : savedAccounts.map((account) => {
+    const profileId = pendingMove?.accountId === account.id
+      ? pendingMove.profileId
+      : account.profileId;
+    return privateView ? {
+      ...account,
+      profileId,
+      displayName: hideNames ? maskPrivateText(account.displayName) : account.displayName,
+      incoming: {
+        ...account.incoming,
+        host: maskPrivateText(account.incoming.host),
+        username: maskPrivateText(account.incoming.username),
+      },
+      outgoing: {
+        ...account.outgoing,
+        host: maskPrivateText(account.outgoing.host),
+        username: maskPrivateText(account.outgoing.username),
+      },
+    } : { ...account, profileId };
+  });
+  const savedProfiles = status?.unlocked ? status.profiles : [];
+  const profiles: Profile[] = privateView
+    ? savedProfiles.map((profile) => ({
+        ...profile,
+        name: hideNames ? maskPrivateText(profile.name) : profile.name,
+        avatar: maskPhotos ? { kind: "icon", value: "person" } : profile.avatar,
+      }))
+    : savedProfiles;
   const activeProfile = profiles.find(
     (profile) => profile.id === activeProfileId,
   );
@@ -1928,13 +2240,57 @@ export default function App() {
     : allAccounts;
   const active =
     accounts.find((account) => account.id === activeId) ?? accounts[0];
-  const visibleCards = accounts.filter(
-    (account) => account.id === active?.id || selected.includes(account.id),
-  );
   const selectedAccounts = allAccounts.filter(({ id }) =>
     selected.includes(id),
   );
   const hasSelection = selectedAccounts.length > 0;
+  const hasExportSidebar = hasSelection || Boolean(directRequest || directReceipt) || linkPane;
+  const directEligibleIds = new Set(directRequest?.accounts.map(([id]) => id));
+  const accountsForSidebar = directRequest
+    ? selectedAccounts.filter(({ id }) => directEligibleIds.has(id))
+    : selectedAccounts;
+  const directAccountIds = directRequest ? accountsForSidebar.map(({ id }) => id) : [];
+
+  const openSelectedAccount = (account: Summary) => {
+    setUnlockSettings(false);
+    setActiveProfileId(undefined);
+    setActiveId(account.id);
+    detailPane.current?.scrollTo({ top: 0, behavior: "auto" });
+  };
+
+  async function linkMailspring() {
+    if (linking || busy || privateView || !status?.unlocked) return;
+    setLinking(true);
+    setLinkError("");
+    try {
+      await invoke("vault_link_mailspring");
+    } catch (error) {
+      setLinkError(typeof error === "string" ? error : "Could not link Mailspring. Try again.");
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  function cancelDirectImport() {
+    if (!directRequestId || busy) return;
+    void run(async () => {
+      await invoke("vault_direct_cancel", { id: directRequestId });
+    });
+  }
+
+  function approveDirectImport() {
+    const verifiedCode = directRequestCode.trim();
+    if (!directRequestId || !directAccountIds.length || verifiedCode.length !== 19 || busy || editing) return;
+    setTransferError("");
+    void run(async () => {
+      const code = await invoke<string>("vault_direct_approve", {
+        id: directRequestId,
+        ids: directAccountIds,
+        verifiedCode,
+      });
+      setDirectReceipt({ code, count: directAccountIds.length });
+    }, setTransferError);
+  }
   useEffect(() => {
     if (!scrollAccount) return;
     const pane = detailPane.current;
@@ -1989,24 +2345,6 @@ export default function App() {
     return () => flight.remove();
   }, [transfer]);
   const visibleSelection = accounts.filter(({ id }) => selected.includes(id));
-  const exportGroups = [
-    ...profiles.map((profile) => ({
-      id: profile.id,
-      name: profile.name,
-      accounts: selectedAccounts.filter(
-        (account) => account.profileId === profile.id,
-      ),
-    })),
-    {
-      id: "ungrouped",
-      name: "Ungrouped",
-      accounts: selectedAccounts.filter(
-        (account) => !profiles.some(({ id }) => id === account.profileId),
-      ),
-    },
-  ].filter((group) => group.accounts.length);
-  const hasProfileGroups = exportGroups.some(({ id }) => id !== "ungrouped");
-
   const deleteAccounts = allAccounts.filter((account) =>
     deleteIds.includes(account.id),
   );
@@ -2057,17 +2395,19 @@ export default function App() {
     setDeleteError("");
     setDeleteIds([]);
   };
+  const removeAccounts = (ids: string[], onError?: (message: string) => void) =>
+    run(async () => {
+      await invoke("vault_delete_accounts", { ids });
+      returnFocus.current = "#account-heading";
+      setSelected((selection) => selection.filter((id) => !ids.includes(id)));
+      setDeleteIds([]);
+      toast.success(ids.length === 1 ? "Account deleted." : "Accounts deleted.");
+    }, onError);
   const deleteReviewedAccounts = () => {
     if (busy || editing || !reviewingDeletion || deleteAccounts.length !== deleteIds.length) return;
     setDeleteError("");
     setDeleting(true);
-    void run(async () => {
-      await invoke("vault_delete_accounts", { ids: deleteIds });
-      returnFocus.current = "#account-heading";
-      setSelected((ids) => ids.filter((id) => !deleteIds.includes(id)));
-      setDeleteIds([]);
-      toast.success(deleteIds.length === 1 ? "Account deleted." : "Accounts deleted.");
-    }, (message) => {
+    void removeAccounts(deleteIds, (message) => {
       deleteFocus.current = "#delete-confirm";
       setDeleteError(message);
     }).finally(() => setDeleting(false));
@@ -2113,19 +2453,34 @@ export default function App() {
           />
           MailPort Vault
         </span>
+        <button
+          type="button"
+          className="privacy-toggle action-reveal"
+          aria-label="Privacy mode"
+          aria-pressed={privateView}
+          onClick={() => setPrivateView((hidden) => !hidden)}
+        >
+          <span className="privacy-toggle-icon" aria-hidden="true">
+            {privateView ? <EyeOff size={16} /> : <Eye size={16} />}
+          </span>
+          <ActionLabel>
+            {privateView ? <Eye size={16} /> : <EyeOff size={16} />}
+            {privateView ? "Unmask" : "Mask"}
+          </ActionLabel>
+        </button>
       </header>
       <main
         id="main-content"
         className={
           status?.unlocked
-            ? `vault-main is-unlocked${profilesCollapsed ? " profiles-collapsed" : ""}${hasSelection ? (exportCollapsed ? " export-collapsed" : " export-expanded") : " no-export-sidebar"}`
+            ? `vault-main is-unlocked${profilesCollapsed ? " profiles-collapsed" : ""}${hasExportSidebar ? (exportCollapsed ? " export-collapsed" : " export-expanded") : " no-export-sidebar"}`
             : "vault-main"
         }
         tabIndex={-1}
       >
         {!status ? (
           <div className="welcome" role={error ? "alert" : "status"}>
-            {error || "Opening vault…"}
+            {error ? displayError(error) : "Opening vault…"}
           </div>
         ) : !status.unlocked ? (
           <div className="welcome">
@@ -2178,7 +2533,7 @@ export default function App() {
                     className="error-banner"
                     role="alert"
                   >
-                    {error}
+                    {displayError(error)}
                   </p>
                 )}
                 <button className="primary unlock-submit" type="submit">
@@ -2230,9 +2585,6 @@ export default function App() {
                   )}
                 </div>
               )}
-            <p className="unlock-note">
-              Use sample accounts while security review is pending.
-            </p>
           </div>
         ) : (
           <>
@@ -2319,7 +2671,7 @@ export default function App() {
                 className="profile-link"
                 aria-label="Add profile"
                 title="Add profile"
-                disabled={busy || editing}
+                disabled={busy || editing || privateView}
                 onClick={() => openProfileEditor(newProfile(), "#add-profile")}
               >
                 <span className="profile-avatar">
@@ -2327,6 +2679,7 @@ export default function App() {
                 </span>
                 <span className="profile-link-label">Add profile</span>
               </button>
+              <div className="profile-utilities" aria-label="Vault controls">
               <button
                 type="button"
                 className="profile-link profile-theme-switch"
@@ -2347,6 +2700,29 @@ export default function App() {
               </button>
               {isMac && (
                 <button
+                  type="button"
+                  className="profile-link"
+                  aria-label="Link email app"
+                  title="Link email app"
+                  aria-expanded={linkPane || Boolean(directRequest)}
+                  disabled={busy || linking || editing || privateView}
+                  onClick={() => {
+                    setUnlockSettings(false);
+                    setExportCollapsed(false);
+                    if (!directRequest) {
+                      setDirectReceipt(null);
+                      setLinkPane(true);
+                    }
+                  }}
+                >
+                  <span className="profile-avatar">
+                    <Icon name="mail" size={17} />
+                  </span>
+                  <span className="profile-link-label">Link email app</span>
+                </button>
+              )}
+              {isMac && (
+                <button
                   id="quick-unlock-settings"
                   className="profile-link profile-settings"
                   aria-label="Settings"
@@ -2362,24 +2738,17 @@ export default function App() {
                   <span className="profile-link-label">Settings</span>
                 </button>
               )}
-              <div className="profile-lock-footer">
-                <button
-                  type="button"
-                  className="profile-link"
-                  aria-label="Lock vault"
-                  title={profilesCollapsed ? "Lock vault" : undefined}
-                  onClick={lock}
-                  disabled={busy}
-                >
-                  <span className="profile-avatar">
-                    <Icon name="lock" size={17} />
-                  </span>
-                  <span className="profile-link-label">Lock vault</span>
-                </button>
+              </div>
+              <div className="profile-lock-section">
                 <div
                   className={`auto-lock-control${autoLockHover || autoLockFocus ? " is-revealed" : ""}`}
                   aria-label="Auto-lock timer"
                 >
+                  <div className="auto-lock-heading" aria-hidden="true">
+                    <span className="auto-lock-heading-status">{autoLock?.paused ? "Paused" : "Locks in"}</span>
+                    <span className="auto-lock-heading-toggle">{autoLock?.paused ? "Resume" : "Pause"}</span>
+                    <span className="auto-lock-heading-lock">Lock Vault</span>
+                  </div>
                   <span className="auto-lock-time" aria-label={autoLock?.paused ? "Auto-lock paused" : "Time until auto-lock"}>
                     {autoLock ? `${Math.floor(autoLock.remainingSeconds / 60)}:${String(autoLock.remainingSeconds % 60).padStart(2, "0")}` : "–:––"}
                   </span>
@@ -2404,6 +2773,22 @@ export default function App() {
                     )}
                   </button>
                 </div>
+                <div className="profile-lock-footer">
+                  <button
+                    type="button"
+                    className="profile-link"
+                    aria-label="Lock vault"
+                    title={profilesCollapsed ? "Lock vault" : undefined}
+                    onClick={lock}
+                    disabled={busy}
+                  >
+                    <span className="profile-avatar profile-lock-icon">
+                      <Icon name="unlock" size={17} />
+                      <Icon name="lock" size={17} />
+                    </span>
+                    <span className="profile-link-label">Lock vault</span>
+                  </button>
+                </div>
               </div>
             </nav>
             <section className="account-pane" aria-labelledby="account-heading">
@@ -2421,10 +2806,12 @@ export default function App() {
                       className="account-heading-select"
                       aria-checked={false}
                       aria-label="Select All"
-                      disabled={busy || editing || !accounts.length}
+                      disabled={busy || editing || !accounts.some(({ id }) => !directRequest || directEligibleIds.has(id))}
                       onClick={() =>
                         setSelected((previous) => [
-                          ...new Set([...previous, ...accounts.map(({ id }) => id)]),
+                          ...new Set([...previous, ...accounts
+                            .filter(({ id }) => !directRequest || directEligibleIds.has(id))
+                            .map(({ id }) => id)]),
                         ])
                       }
                     >
@@ -2443,24 +2830,25 @@ export default function App() {
                   <button
                     id="edit-profile"
                     type="button"
-                    className="icon-button profile-edit"
+                    className="icon-button action-reveal profile-edit"
                     aria-label="Edit profile"
                     title="Edit profile"
-                    disabled={busy || editing}
+                  disabled={busy || editing || privateView}
                     onClick={() =>
                       openProfileEditor(activeProfile, "#edit-profile")
                     }
                   >
                     <Icon name="edit" size={16} />
+                    <ActionLabel><Icon name="edit" size={16} /> Edit</ActionLabel>
                   </button>
                 )}
                 <button
                   id="add-account"
                   data-control-glass
-                  className="icon-button"
+                  className="icon-button action-reveal"
                   aria-label={hasSelection ? "Clear selection" : "Add account"}
                   title={hasSelection ? "Clear selection" : "Add account"}
-                  disabled={busy || editing}
+                  disabled={busy || editing || (privateView && !hasSelection)}
                   onClick={() => {
                     if (hasSelection) {
                       setSelected([]);
@@ -2471,6 +2859,10 @@ export default function App() {
                   }}
                 >
                   <Icon name={hasSelection ? "close" : "plus"} size={19} />
+                  <ActionLabel>
+                    <Icon name={hasSelection ? "close" : "plus"} size={16} />
+                    {hasSelection ? "Clear" : "Add"}
+                  </ActionLabel>
                 </button>
               </div>
               {accounts.length > 0 && (
@@ -2488,8 +2880,8 @@ export default function App() {
                           role="checkbox"
                           className="secondary account-select-avatar"
                           aria-checked={selected.includes(account.id)}
-                          aria-label={`Select ${account.email} for export`}
-                          disabled={busy}
+                          aria-label={`Select ${displayPrivate(account.email)} for ${directRequest ? "import" : "export"}`}
+                          disabled={busy || Boolean(directRequest && !directEligibleIds.has(account.id))}
                           onClick={() => toggle(account.id)}
                         >
                           {selected.includes(account.id) ? (
@@ -2499,9 +2891,13 @@ export default function App() {
                             </>
                           ) : (
                             <>
-                              <span className="account-avatar-initial" aria-hidden="true">
-                                {Array.from(account.displayName.trim() || account.email)[0]?.toLocaleUpperCase()}
-                              </span>
+                              <EmailAvatar
+                                key={account.email}
+                                email={account.email}
+                                lookup={!maskPhotos}
+                                fallbackName={account.displayName || displayPrivate(account.email)}
+                                className="account-list-avatar"
+                              />
                               <span className="account-select-ring" aria-hidden="true" />
                             </>
                           )}
@@ -2515,17 +2911,17 @@ export default function App() {
                           }
                           aria-label={
                             account.displayName
-                              ? `${account.displayName}, ${account.email}`
-                              : account.email
+                              ? `${account.displayName}, ${displayPrivate(account.email)}`
+                              : displayPrivate(account.email)
                           }
                           onClick={() => {
                             openAccount(account.id);
                           }}
                         >
                           <strong>
-                            {account.displayName || account.email}
+                            {account.displayName || displayPrivate(account.email)}
                           </strong>
-                          {account.displayName && <span>{account.email}</span>}
+                          {account.displayName && <span>{displayPrivate(account.email)}</span>}
                         </button>
                         <span
                           className="account-grab"
@@ -2556,14 +2952,14 @@ export default function App() {
                       {deleteAccounts.length === 1 ? "Delete account?" : `Delete ${deleteAccounts.length} accounts?`}
                     </h2>
                     <ul aria-label="Accounts to delete">
-                      {deleteAccounts.map(({ id, email }) => <li key={id}>{email}</li>)}
+                      {deleteAccounts.map(({ id, email }) => <li key={id}>{displayPrivate(email)}</li>)}
                     </ul>
                     <p>Remove these settings and credentials from MailPort. Your mailboxes stay with their providers.</p>
-                    {deleteError && <p className="error-banner" role="alert">{deleteError}</p>}
+                    {deleteError && <p className="error-banner" role="alert">{displayError(deleteError)}</p>}
                   </div>
-                  <footer className="account-delete-area">
+                  <footer className="account-delete-area action-pair">
                     <button
-                      className="icon-button"
+                      className="icon-button action-reveal action-cancel"
                       type="button"
                       aria-label="Cancel deletion"
                       title="Cancel deletion"
@@ -2571,20 +2967,23 @@ export default function App() {
                       onClick={cancelDeletion}
                     >
                       <Icon name="close" size={16} />
+                      <ActionLabel><Icon name="close" size={16} /> Cancel</ActionLabel>
                     </button>
                     <button
                       id="delete-confirm"
-                      className="secondary danger-button"
+                      className="secondary danger-button action-reveal"
+                      data-action-expanded=""
                       type="button"
+                      aria-label={deleting ? "Deleting accounts" : "Confirm delete"}
                       disabled={busy || editing}
                       onClick={deleteReviewedAccounts}
                     >
-                      {deleting ? <LoadingLabel>Deleting…</LoadingLabel> : (
-                        <>
-                          <Icon name="trash" size={16} />
-                          Confirm delete
-                        </>
-                      )}
+                      <Icon name="trash" size={16} />
+                      <ActionLabel>
+                        {deleting ? <LoadingLabel>Deleting…</LoadingLabel> : (
+                          <><Icon name="trash" size={16} /> Confirm delete</>
+                        )}
+                      </ActionLabel>
                     </button>
                   </footer>
                 </section>
@@ -2610,7 +3009,7 @@ export default function App() {
             <section ref={detailPane} className="detail-pane" aria-label="Account details">
               {error && (
                 <p className="error-banner" role="alert">
-                  {error}
+                  {displayError(error)}
                 </p>
               )}
               {unlockSettings ? (
@@ -2632,6 +3031,34 @@ export default function App() {
                       Done
                     </button>
                   </div>
+                  <div className="detail-section">
+                    <h3>Privacy mode</h3>
+                    <label className="privacy-setting">
+                      <input
+                        type="checkbox"
+                        checked={hideNames}
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
+                          setHideNames(checked);
+                          writeFlag("mailport.privacy.hideNames", checked);
+                        }}
+                      />
+                      <span>Hide account and profile names</span>
+                    </label>
+                    <label className="privacy-setting">
+                      <input
+                        type="checkbox"
+                        checked={hidePhotos}
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
+                          setHidePhotos(checked);
+                          writeFlag("mailport.privacy.hidePhotos", checked);
+                        }}
+                      />
+                      <span>Hide profile pictures</span>
+                    </label>
+                  </div>
+                  <CacheSettings />
                   <div className="detail-section">
                     <h3>Touch ID</h3>
                     <p>
@@ -2700,7 +3127,7 @@ export default function App() {
                             <Field label="Secret reference">
                               <input
                                 name="reference"
-                                type="text"
+                                type={privateView ? "password" : "text"}
                                 placeholder="op://Vault/Item/password"
                                 autoComplete="off"
                                 spellCheck={false}
@@ -2775,7 +3202,7 @@ export default function App() {
               ) : editor ? (
                 <section
                   className="detail-page inline-editor"
-                  aria-labelledby="editor-heading"
+                  aria-labelledby={privateView ? "privacy-editor-notice" : "editor-heading"}
                   onKeyDown={(event) => {
                     if (
                       event.key === "Escape" &&
@@ -2785,11 +3212,17 @@ export default function App() {
                       setEditor(null);
                   }}
                 >
+                  {privateView && (
+                    <p id="privacy-editor-notice" className="privacy-editor-notice" role="status">
+                      Show private details to continue editing.
+                    </p>
+                  )}
                   <AccountForm
                     key={editor.id}
                     initial={editor}
                     busy={busy}
                     error={modalError}
+                    privateView={privateView}
                     onCancel={() => setEditor(null)}
                     onSave={(account) =>
                       void run(async () => {
@@ -2805,17 +3238,40 @@ export default function App() {
                 </section>
               ) : active ? (
                 <div className="account-feed">
-                  {visibleCards.map((account) => (
-                    <AccountDetailCard
-                      key={account.id}
-                      account={account}
-                      profiles={profiles}
-                      busy={busy}
-                      selected={selected.includes(account.id)}
-                      onEdit={() => edit(account.id)}
-                      onChooseProfile={(id) => moveAccount(account.id, id)}
-                    />
-                  ))}
+                  <AccountDetailCard
+                    key={active.id}
+                    account={active}
+                    profiles={profiles}
+                    privateView={privateView}
+                    maskPhotos={maskPhotos}
+                    busy={busy}
+                    selected={selected.includes(active.id)}
+                    onEdit={() => edit(active.id)}
+                    onDelete={() => {
+                      if (!busy && !privateView) void removeAccounts([active.id]);
+                    }}
+                    onChooseProfile={(id) => moveAccount(active.id, id)}
+                  />
+                  {selectedAccounts.length > 0 && (
+                    <section className="account-passports" aria-labelledby="selected-accounts-heading">
+                      <div className="account-passports-heading">
+                        <h3 id="selected-accounts-heading">Selected accounts</h3>
+                        <span>{selectedAccounts.length}</span>
+                      </div>
+                      <div className="account-passport-strip">
+                        {selectedAccounts.map((account) => (
+                          <AccountPassportCard
+                            key={account.id}
+                            account={account}
+                            active={account.id === active.id}
+                            privateView={privateView}
+                            maskPhotos={maskPhotos}
+                            onOpen={() => openSelectedAccount(account)}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
                 </div>
               ) : (
                 <div className="empty-state">
@@ -2828,33 +3284,19 @@ export default function App() {
                     <button
                       id="empty-add-account"
                       className="primary"
-                      disabled={busy}
+                      disabled={busy || privateView}
                       onClick={() => edit(undefined, "#empty-add-account")}
                     >
                       Add account
                     </button>
-                    {allAccounts.length === 0 && !activeProfile && (
-                      <button
-                        className="secondary"
-                        disabled={busy}
-                        onClick={() =>
-                          void run(async () => {
-                            await invoke("vault_demo");
-                            toast.success("Added five sample accounts.");
-                          })
-                        }
-                      >
-                        Try sample accounts
-                      </button>
-                    )}
                   </div>
                 </div>
               )}
             </section>
-            {hasSelection && (
+            {hasExportSidebar && (
               <aside
                 className="export-sidebar"
-                data-transfer-open={!exportCollapsed && transfer ? "" : undefined}
+                data-transfer-open={!exportCollapsed && (transfer || directRequest || linkPane || directReceipt) ? "" : undefined}
                 aria-labelledby="export-heading"
               >
                 <div className="export-toolbar">
@@ -2862,7 +3304,7 @@ export default function App() {
                     id="export-heading"
                     className={exportCollapsed ? "sr-only" : undefined}
                   >
-                    Selected accounts
+                    Transfer
                   </h2>
                   <button
                     type="button"
@@ -2870,17 +3312,17 @@ export default function App() {
                     aria-expanded={!exportCollapsed}
                     aria-label={
                       exportCollapsed
-                        ? "Expand selected accounts"
-                        : "Collapse selected accounts"
+                        ? "Expand transfer sidebar"
+                        : "Collapse transfer sidebar"
                     }
                     title={
                       exportCollapsed
-                        ? "Expand selected accounts"
-                        : "Collapse selected accounts"
+                        ? "Expand transfer sidebar"
+                        : "Collapse transfer sidebar"
                     }
                     disabled={busy}
                     onClick={() => {
-                      if (exportCollapsed && transfer) {
+                      if (exportCollapsed && transfer && !directRequest && !linkPane && !directReceipt) {
                         openTransfer();
                       } else {
                         setExportCollapsed(!exportCollapsed);
@@ -2890,20 +3332,6 @@ export default function App() {
                     <Icon name="sidebar" size={16} />
                   </button>
                 </div>
-                {!exportCollapsed && (
-                  <div className="export-selection">
-                    {exportGroups.map((group) => (
-                      <section key={group.id}>
-                        {hasProfileGroups && <h3>{group.name}</h3>}
-                        <ul>
-                          {group.accounts.map((account) => (
-                            <li key={account.id}>{account.email}</li>
-                          ))}
-                        </ul>
-                      </section>
-                    ))}
-                  </div>
-                )}
                 {!exportCollapsed && (
                   <div className="export-package">
                     <img
@@ -2916,11 +3344,104 @@ export default function App() {
                       draggable={false}
                     />
                     <p className="export-package-type">
-                      Encrypted <code>.mailport</code> package
+                      {directRequest || linkPane || directReceipt ? "Encrypted direct import" : <>Encrypted <code>.mailport</code> package</>}
                     </p>
                   </div>
                 )}
-                {!exportCollapsed && transfer ? (
+                {!exportCollapsed && directReceipt ? (
+                  <section className="transfer-panel" aria-labelledby="direct-receipt-heading">
+                    <div className="transfer-content">
+                      <h3 id="direct-receipt-heading">Accounts sent</h3>
+                      <p>Enter this transfer code in Mailspring to import {directReceipt.count === 1 ? "the account" : `all ${directReceipt.count} accounts`}.</p>
+                      <code className="transfer-code">{directReceipt.code}</code>
+                    </div>
+                    <footer className="export-footer transfer-actions">
+                      <button type="button" className="primary" onClick={() => setDirectReceipt(null)}>Done</button>
+                    </footer>
+                  </section>
+                ) : !exportCollapsed && directRequest ? (
+                  <section className="transfer-panel" aria-labelledby="direct-transfer-heading">
+                    <div className="transfer-content">
+                      <h3 id="direct-transfer-heading">Send to Mailspring</h3>
+                      {directRequest.receiverVerified && <small>Receiving app verified by macOS</small>}
+                      {directRequest.accounts.length === 0 ? (
+                        <p>Add an account in MailPort to continue.</p>
+                      ) : directAccountIds.length === 0 ? (
+                        <p>Use the account checkboxes to select what to send.</p>
+                      ) : (
+                        <p>{directAccountIds.length} {directAccountIds.length === 1 ? "account" : "accounts"} ready to send.</p>
+                      )}
+                      <Field label="Request code from Mailspring">
+                        <input
+                          value={directRequestCode}
+                          maxLength={19}
+                          spellCheck={false}
+                          autoComplete="off"
+                          disabled={busy}
+                          onChange={(event) => setDirectRequestCode(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") approveDirectImport();
+                          }}
+                        />
+                      </Field>
+                      {transferError && <p className="transfer-error" role="alert">{displayError(transferError)}</p>}
+                    </div>
+                    <footer className="export-footer transfer-actions action-pair">
+                      <button
+                        className="primary action-reveal"
+                        data-action-expanded=""
+                        type="button"
+                        disabled={!directAccountIds.length || directRequestCode.trim().length !== 19 || busy || editing}
+                        aria-label="Approve import"
+                        onClick={approveDirectImport}
+                      >
+                        <Icon name="check" size={16} />
+                        <ActionLabel>{busy ? <LoadingLabel>Preparing…</LoadingLabel> : "Approve import"}</ActionLabel>
+                      </button>
+                      <button
+                        className="icon-button action-reveal action-cancel transfer-cancel"
+                        type="button"
+                        aria-label="Cancel direct import"
+                        disabled={busy}
+                        onClick={cancelDirectImport}
+                      >
+                        <Icon name="close" size={16} />
+                        <ActionLabel>Cancel import</ActionLabel>
+                      </button>
+                    </footer>
+                  </section>
+                ) : !exportCollapsed && linkPane ? (
+                  <section className="transfer-panel" aria-labelledby="link-app-heading">
+                    <div className="transfer-content">
+                      <h3 id="link-app-heading">Link email app</h3>
+                      <p>Keep the Mailspring preview open. You’ll approve the accounts here.</p>
+                      {linkError && <p className="transfer-error" role="alert">{displayError(linkError)}</p>}
+                    </div>
+                    <footer className="export-footer transfer-actions action-pair">
+                      <button
+                        className="primary action-reveal"
+                        data-action-expanded=""
+                        type="button"
+                        disabled={linking || busy || editing}
+                        aria-label={linking ? "Linking Mailspring" : "Link Mailspring"}
+                        onClick={() => void linkMailspring()}
+                      >
+                        <Icon name="mail" size={16} />
+                        <ActionLabel>{linking ? <LoadingLabel>Linking…</LoadingLabel> : "Link Mailspring"}</ActionLabel>
+                      </button>
+                      <button
+                        className="icon-button action-reveal action-cancel transfer-cancel"
+                        type="button"
+                        aria-label="Close app linking"
+                        disabled={linking}
+                        onClick={() => setLinkPane(false)}
+                      >
+                        <Icon name="close" size={16} />
+                        <ActionLabel>Cancel</ActionLabel>
+                      </button>
+                    </footer>
+                  </section>
+                ) : !exportCollapsed && transfer ? (
                   <section className="transfer-panel" aria-labelledby="export-stage-heading">
                     <div className="transfer-content">
                       <h3 id="export-stage-heading" tabIndex={-1}>
@@ -2935,7 +3456,7 @@ export default function App() {
                       )}
                       {transfer.stage === "review" && (
                         <>
-                          <p>Does this code match the one in <strong>{transfer.recipient.clientName}</strong>?</p>
+                          <p>Does this code match the one in <strong>{displayPrivate(transfer.recipient.clientName)}</strong>?</p>
                           <code className="transfer-code">{transfer.recipient.verificationCode}</code>
                           <small>Your email app can keep the credentials you share.</small>
                           <button
@@ -2954,36 +3475,42 @@ export default function App() {
                           <p className="transfer-location">
                             <span ref={transferFolder}><Icon name="folder" size={16} /></span>
                             <span>
-                              {transfer.folderName ? <>Saved <strong>{transfer.fileName}</strong> to <strong>{transfer.folderName}</strong></> : <>Saved <strong>{transfer.fileName}</strong></>}
+                              {transfer.folderName ? <>Saved <strong>{displayPrivate(transfer.fileName)}</strong> to <strong>{displayPrivate(transfer.folderName)}</strong></> : <>Saved <strong>{displayPrivate(transfer.fileName)}</strong></>}
                             </span>
                           </p>
-                          <p>Open <strong>{transfer.fileName}</strong> in your email app and check that this code matches.</p>
+                          <p>Open <strong>{displayPrivate(transfer.fileName)}</strong> in your email app and check that this code matches.</p>
                           <code className="transfer-code">{transfer.code}</code>
                         </>
                       )}
-                      {transferError && <p className="transfer-error" role="alert">{transferError}</p>}
+                      {transferError && <p className="transfer-error" role="alert">{displayError(transferError)}</p>}
                     </div>
-                    <footer className="export-footer transfer-actions">
+                    <footer className={`export-footer transfer-actions${transfer.stage === "saved" ? "" : " action-pair"}`}>
                       {transfer.stage === "request" && (
                         <button
                           id="transfer-choose-request"
-                          className="primary export-action"
+                          className="primary export-action action-reveal"
+                          data-action-expanded=""
                           type="button"
+                          aria-label={transferAction === "choose" ? "Opening…" : "Open import file"}
                           disabled={busy || editing}
                           onClick={chooseImportRequest}
                         >
-                          {transferAction === "choose" ? <LoadingLabel>Opening…</LoadingLabel> : "Open import file"}
+                          <Icon name="folder" size={16} />
+                          <ActionLabel>{transferAction === "choose" ? <LoadingLabel>Opening…</LoadingLabel> : "Open import file"}</ActionLabel>
                         </button>
                       )}
                       {transfer.stage === "review" && (
                         <button
                           id="transfer-approve"
-                          className="primary"
+                          className="primary action-reveal"
+                          data-action-expanded=""
                           type="button"
+                          aria-label={transferAction === "save" ? "Preparing…" : "Codes match · Save"}
                           disabled={busy || editing}
                           onClick={saveTransfer}
                         >
-                          {transferAction === "save" ? <LoadingLabel>Preparing…</LoadingLabel> : "Codes match · Save"}
+                          <Icon name="check" size={16} />
+                          <ActionLabel>{transferAction === "save" ? <LoadingLabel>Preparing…</LoadingLabel> : "Codes match · Save"}</ActionLabel>
                         </button>
                       )}
                       {transfer.stage === "saved" ? (
@@ -2991,17 +3518,17 @@ export default function App() {
                       ) : (
                         <button
                           type="button"
-                          className="icon-button transfer-cancel"
+                          className="icon-button action-reveal action-cancel transfer-cancel"
                           aria-label="Cancel transfer"
                           title="Cancel transfer"
                           disabled={busy}
                           onClick={closeTransfer}
                         >
                           <Icon name="close" size={16} />
-                          <span className="transfer-cancel-label" aria-hidden="true">
+                          <ActionLabel>
                             <Icon name="close" size={16} />
                             Cancel transfer
-                          </span>
+                          </ActionLabel>
                         </button>
                       )}
                     </footer>
@@ -3014,16 +3541,16 @@ export default function App() {
                       className={`export-action ${exportCollapsed ? "icon-button" : "secondary"}`}
                       aria-label={
                         exportCollapsed
-                          ? transfer ? "Show transfer" : `Export ${selectedAccounts.length} selected accounts`
+                          ? transfer || directRequest || linkPane || directReceipt ? "Show transfer" : `Export ${selectedAccounts.length} selected accounts`
                           : undefined
                       }
                       title={
                         exportCollapsed
-                          ? transfer ? "Show transfer" : `Export ${selectedAccounts.length} selected accounts`
+                          ? transfer || directRequest || linkPane || directReceipt ? "Show transfer" : `Export ${selectedAccounts.length} selected accounts`
                           : undefined
                       }
                       disabled={busy || editing}
-                      onClick={openTransfer}
+                      onClick={directRequest || linkPane || directReceipt ? () => setExportCollapsed(false) : openTransfer}
                     >
                       <Icon name="export" size={16} />
                       {!exportCollapsed && (
@@ -3044,7 +3571,7 @@ export default function App() {
         <div ref={paintCard} className="account-drag-card" aria-hidden="true">
           <Icon name="mail" size={18} />
           <span>
-            <strong>{carried.displayName || carried.email}</strong>
+            <strong>{carried.displayName || displayPrivate(carried.email)}</strong>
             {targetProfile && <small>Drop into {targetProfile.name}</small>}
             {dropTarget === "delete" && <small>Review deletion</small>}
           </span>

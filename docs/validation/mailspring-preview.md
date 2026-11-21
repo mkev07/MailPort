@@ -70,6 +70,22 @@ arrived in the external mailbox. This verifies live incoming and outgoing mail
 for the two tested configurations. Restart persistence with these live accounts
 was not reported.
 
+## Direct handoff on macOS
+
+The project owner confirmed starting **Open MailPort** in the Mailspring preview
+and approving the import in MailPort Vault. The isolated Mailspring profile
+contained four built-in sample accounts after the client quit. A fresh Electron
+process using the Mailspring app identity verified both saved credentials for
+each account through macOS secure storage. This exercises the direct handoff
+without exchanging request or package files. The built-in samples use
+placeholder servers, and this run did not check mail connectivity.
+
+The encrypted file route also passed the two-account synthetic import check
+with the same patched Mailspring checkout. The preview now permits real account
+selection, but that updated direct handoff has not yet been validated with a
+live mailbox. The default development build does not pin the receiving app's
+code signature. A signing requirement can be configured for identity testing.
+
 ## Send and receive with controlled servers
 
 The Mailspring preview on Debian 13 ARM64 imported two synthetic accounts,

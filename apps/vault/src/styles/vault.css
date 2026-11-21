@@ -11,6 +11,7 @@
   font-family: "Allo", system-ui, sans-serif;
   font-optical-sizing: auto;
   --vault-toolbar-height: 52px;
+  --vault-footer-height: 59px;
   --vault-shell-inset: 12px;
   --vault-motion-fast: 80ms;
   --vault-motion-standard: 160ms;
@@ -64,6 +65,45 @@ html.has-native-glass .vault-app {
 }
 .is-mac .drag-strip {
   padding-inline-start: 88px;
+}
+.drag-strip .privacy-toggle {
+  --action-rest-width: 28px;
+  --action-hover-width: 106px;
+  display: inline-grid;
+  place-items: center;
+  height: 28px;
+  margin-inline-start: auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+}
+.drag-strip .privacy-toggle:is(:hover, :focus-visible) {
+  border-color: var(--vault-border);
+  background: var(--vault-raised);
+}
+.vault-app .drag-strip .privacy-toggle[data-native-glass] {
+  border-color: transparent;
+  background: transparent;
+}
+.privacy-toggle-icon {
+  display: grid;
+  place-items: center;
+}
+.drag-strip .privacy-toggle:focus-visible {
+  width: var(--action-hover-width);
+}
+.privacy-toggle:focus-visible .privacy-toggle-icon {
+  visibility: hidden;
+}
+.privacy-toggle:focus-visible .action-reveal-label {
+  opacity: 1;
+}
+.privacy-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-block-start: 8px;
 }
 .profile-sidebar {
   display: flex;
@@ -161,47 +201,93 @@ html.has-native-glass .vault-app {
   outline: 1.5px solid var(--profile-avatar-color, var(--vault-muted));
   outline-offset: 2px;
 }
+.profile-utilities {
+  display: grid;
+  flex: none;
+  gap: 3px;
+  margin-block-start: auto;
+}
 .profile-settings {
-  margin-top: auto;
+  margin-top: 0;
+}
+.profile-lock-section {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  margin: 0 -8px -10px;
 }
 .profile-lock-footer {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  flex: none;
-  min-height: 82px;
-  margin: 0 -8px -10px;
-  padding: 5px 8px 8px;
+  align-items: center;
+  min-height: var(--vault-footer-height);
+  padding-inline: 8px;
   border-block-start: 1px solid var(--vault-border);
 }
+.profile-lock-icon svg:last-child,
+.profile-lock-footer .profile-link:is(:hover, :focus-visible):not(:disabled) .profile-lock-icon svg:first-child {
+  display: none;
+}
+.profile-lock-footer .profile-link:is(:hover, :focus-visible):not(:disabled) .profile-lock-icon svg:last-child {
+  display: block;
+}
 .auto-lock-control {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  justify-content: center;
+  column-gap: 4px;
   min-width: 0;
-  padding-inline: 6px;
+  padding: 4px 12px;
+}
+.auto-lock-heading {
+  grid-column: 1 / -1;
+  contain: inline-size;
+  min-height: 1.25em;
+  color: var(--vault-muted);
+  font-size: 10px;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+}
+.auto-lock-heading-status {
+  display: var(--timer-status, inline);
+}
+.auto-lock-heading-toggle {
+  display: var(--timer-action, none);
+}
+.auto-lock-heading-lock {
+  display: var(--lock-action, none);
+}
+.auto-lock-control:is(:hover, :focus-within):has(.auto-lock-pause:enabled) {
+  --timer-status: none;
+  --timer-action: inline;
+}
+.profile-lock-section:has(.profile-lock-footer .profile-link:is(:hover, :focus-visible):enabled) .auto-lock-control {
+  --timer-status: none;
+  --timer-action: none;
+  --lock-action: inline;
 }
 .auto-lock-time {
+  inline-size: 4ch;
   color: var(--vault-muted);
   font: 11px/1.2 var(--vault-mono);
   font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 .auto-lock-control .auto-lock-pause[data-control-glass] {
   display: inline-grid;
   flex: none;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   color: var(--vault-text);
-  border: 0;
+  border: 1px solid transparent;
   background: transparent;
 }
 .auto-lock-control.is-revealed .auto-lock-pause[data-control-glass] {
   background: var(--vault-raised);
-  border: 1px solid var(--vault-border);
+  border-color: var(--vault-border);
 }
 .vault-app .auto-lock-control.is-revealed .auto-lock-pause[data-native-glass] {
   background: transparent;
@@ -212,17 +298,23 @@ html.has-native-glass .vault-app {
   outline-offset: 2px;
 }
 .profiles-collapsed .auto-lock-control {
-  gap: 1px;
-  padding-inline: 0;
+  column-gap: 1px;
+  padding-inline: 4px;
+}
+.profiles-collapsed .auto-lock-heading {
+  font-size: 9px;
 }
 .profiles-collapsed .auto-lock-time { font-size: 9px; }
 .profiles-collapsed .auto-lock-control .auto-lock-pause[data-control-glass] { width: 20px; height: 20px; }
 @media (max-width: 1040px) {
-  .profile-lock-footer {
+  .profile-lock-section {
+    flex-direction: row;
     align-self: stretch;
-    min-height: 0;
     margin: 0;
-    padding: 0 0 0 4px;
+  }
+  .profile-lock-footer {
+    min-height: 0;
+    padding-inline: 4px 0;
     border-block-start: 0;
     border-inline-start: 1px solid var(--vault-border);
   }
@@ -513,7 +605,7 @@ html.has-native-glass .vault-app {
   border-end-end-radius: 12px;
 }
 .detail-pane > * {
-  width: min(100%, 630px);
+  width: min(100%, var(--detail-content-width));
   margin-inline: auto;
 }
 .account-pane,
@@ -530,6 +622,7 @@ html.has-native-glass .vault-app {
   border-inline-end: 0;
 }
 .detail-pane {
+  --detail-content-width: 630px;
   padding: 0 16px 24px;
   overflow: auto;
   --glass-surface-fill: var(--vault-detail);
@@ -540,42 +633,167 @@ html.has-native-glass .vault-app {
   padding-block: 24px;
 }
 .detail-pane > .account-feed {
-  display: grid;
-  gap: 18px;
-  width: min(100%, 54rem);
-  margin-inline: auto;
-}
-.detail-pane > .account-feed:has(> .account-card:only-child) {
-  width: min(100%, 32rem);
-  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  gap: 24px;
 }
 .account-feed .account-card {
   --account-avatar-size: 56px;
   container-type: inline-size;
-  padding: clamp(20px, 2.4vw, 28px);
+  min-width: 0;
+  padding-block: 20px;
   overflow-wrap: anywhere;
 }
-.account-feed .account-card:not(:last-child) {
-  border-block-end: 1px solid var(--vault-border);
-}
-.account-feed .account-card:only-child {
-  min-width: 0;
+.account-feed > .account-card {
   padding-block-start: 0;
 }
-.account-feed .account-card:only-child .account-card-servers {
+.account-feed > .account-card .account-card-servers {
   grid-template-columns: minmax(0, 1fr);
 }
-.account-feed .account-card:only-child .account-card-server {
+.account-feed > .account-card .account-card-server {
   padding-inline: 0;
 }
-.account-feed .account-card:only-child .account-card-server + .account-card-server {
+.account-feed > .account-card .account-card-server + .account-card-server {
   border-inline-start: 0;
   border-block-start: 1px solid var(--vault-border);
 }
-.account-feed .account-card:only-child .account-card-footer {
+.account-feed > .account-card .account-card-footer {
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+}
+
+.account-passports {
+  display: grid;
+  gap: 9px;
+  margin-block-start: auto;
+  padding-block-start: 16px;
+  border-block-start: 1px solid var(--vault-border);
+}
+.account-passports-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--vault-muted);
+  font-size: 0.75rem;
+}
+.account-passports-heading h3 {
+  font: inherit;
+  font-weight: 600;
+}
+.account-passports-heading > span {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--vault-raised);
+  font: 0.6875rem/1.5 var(--vault-mono);
+  text-align: center;
+}
+.account-passport-strip {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 2px 7px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+}
+.account-passport {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  grid-template-rows: 26px auto;
+  align-items: start;
+  flex: 0 0 12rem;
+  gap: 15px 6px;
+  min-width: 0;
+  min-height: 112px;
+  padding: 13px;
+  border: 1px solid var(--vault-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--vault-panel) 97%, transparent);
+  text-align: start;
+  scroll-snap-align: start;
+  transition: background-color var(--vault-motion-fast) ease,
+    border-color var(--vault-motion-fast) ease,
+    transform var(--vault-motion-standard) var(--vault-press-ease);
+}
+.account-passport:is(:hover, :focus-visible) {
+  border-color: var(--vault-control-border);
+  background: color-mix(in srgb, var(--vault-text) 6%, var(--vault-panel));
+}
+.account-passport:active {
+  transform: scale(0.98);
+}
+.account-passport[aria-current] {
+  border-color: color-mix(in srgb, var(--vault-accent) 60%, var(--vault-border));
+  background: color-mix(in srgb, var(--vault-accent) 9%, var(--vault-panel));
+}
+.account-passport-logo {
+  grid-column: 1;
+  grid-row: 1;
+  object-fit: contain;
+}
+.account-passport-details {
+  display: flex;
+  align-items: center;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  gap: 8px;
+  min-width: 0;
+}
+.account-passport-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--vault-raised);
+  font-size: 0.6875rem;
+}
+.account-passport-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.account-passport-identity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  line-height: 1.2;
+}
+.account-passport-identity :is(strong, span) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-passport-identity strong {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.account-passport-identity span {
+  color: var(--vault-muted);
+  font-family: var(--vault-mono);
+  font-size: 0.625rem;
+}
+.account-passport-check {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--vault-raised);
+  color: var(--vault-muted);
+  visibility: hidden;
+}
+.account-passport[aria-current] .account-passport-check {
+  background: var(--vault-check-fill);
+  color: var(--vault-check-ink);
+  visibility: visible;
 }
 .account-card-header {
   display: flex;
@@ -583,6 +801,7 @@ html.has-native-glass .vault-app {
   gap: 14px;
 }
 .account-card-avatar {
+  flex-shrink: 0;
   width: var(--account-avatar-size);
   height: var(--account-avatar-size);
 }
@@ -600,8 +819,30 @@ html.has-native-glass .vault-app {
   margin-block-start: 3px;
   color: var(--vault-muted);
 }
-.account-card-edit {
+.account-card-actions {
+  display: flex;
   flex: none;
+  align-items: center;
+  gap: 6px;
+}
+.vault-app .account-card-delete-trigger:is(:hover, :focus-visible):not(:disabled) {
+  --vault-control-tint: var(--vault-button-danger-color, var(--vault-danger-tint));
+  --vault-control-tint-strength: var(--vault-button-danger-strength, 82);
+  color: #fff4f4;
+}
+.vault-app .account-card-delete-trigger:is(:hover, :focus-visible):not(:disabled, [data-native-glass]) {
+  background: var(--vault-danger-fill);
+  border-color: #ff788491;
+}
+@container (max-width: 380px) {
+  .account-card-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .account-card-actions {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
 }
 .account-card-servers {
   display: grid;
@@ -762,41 +1003,11 @@ html.has-native-glass .vault-app {
   justify-content: center;
   padding-inline: 8px;
 }
-.export-selection {
-  display: grid;
-  flex: 1;
-  align-content: start;
-  gap: 14px;
-  overflow: auto;
-  padding: 4px 16px 12px;
-}
-.export-sidebar[data-transfer-open] .export-selection {
-  min-block-size: 48px;
-}
-.export-selection h3 {
-  margin-bottom: 6px;
-  color: var(--vault-muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.export-selection ul {
-  display: grid;
-  gap: 7px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.export-selection li {
-  font-family: var(--vault-mono);
-  font-size: 0.75rem;
-  overflow-wrap: anywhere;
-}
 .export-package {
   display: grid;
   justify-items: center;
   gap: 2px;
-  margin: 8px 0 12px;
+  margin: auto 0 12px;
 }
 .export-package-icon {
   flex: none;
@@ -835,6 +1046,7 @@ html.has-native-glass .vault-app {
 .export-footer,
 .account-delete-area {
   display: flex;
+  min-height: var(--vault-footer-height);
   margin-top: auto;
   padding-inline: 12px;
 }
@@ -850,8 +1062,8 @@ html.has-native-glass .vault-app {
 .account-delete-area button {
   min-height: 34px;
 }
-.export-expanded .export-footer button,
-.account-delete-area button {
+.export-expanded .export-footer:not(.action-pair) button,
+.account-delete-area:not(.action-pair) button {
   width: 100%;
 }
 .selection-count {
@@ -1157,16 +1369,6 @@ html.has-native-glass .vault-app {
 .unlock-form .unlock-submit:hover:not(:disabled) {
   background: var(--vault-hover);
 }
-.unlock-note {
-  margin: 16px auto 0;
-  max-width: 27ch;
-  font-size: 0.75rem;
-  line-height: 1.45;
-  text-wrap: pretty;
-}
-.welcome > .unlock-note {
-  margin-top: 16px;
-}
 html.has-native-glass .vault-app:has(.welcome) {
   --glass-surface-fill: rgba(18, 18, 18, var(--vault-shell-opacity, 0.53));
 }
@@ -1374,27 +1576,25 @@ fieldset {
   background-color: color-mix(in srgb,
     var(--vault-control-tint) var(--vault-control-mix), var(--vault-control-base, var(--vault-raised)));
 }
-.export-expanded .transfer-actions .primary {
-  grid-area: 1 / 1;
-  width: auto;
-  min-inline-size: 0;
-  padding-inline: 6px;
+.transfer-actions.action-pair {
+  display: flex;
+  gap: 8px;
+  --action-pair-width: calc(100% - 42px);
 }
-.transfer-actions:has(.transfer-cancel) .primary {
-  margin-inline-end: 42px;
+@media (hover: hover) {
+  .vault-app .export-footer button.export-action:hover:not(:disabled) {
+    --vault-control-tint: var(--vault-button-export-hover-color, var(--vault-button-export-color));
+    --vault-control-tint-strength: var(--vault-button-export-hover-strength, var(--vault-button-export-strength));
+  }
 }
-.export-expanded .transfer-actions .transfer-cancel {
+
+.action-reveal {
   position: relative;
-  grid-area: 1 / 1;
-  justify-self: end;
-  z-index: 1;
-  width: 34px;
-  height: 34px;
-  padding: 0;
+  flex-shrink: 0;
+  width: var(--action-rest-width, 34px);
   overflow: hidden;
-  border-radius: 999px;
 }
-.transfer-cancel-label {
+.action-reveal-label {
   position: absolute;
   inset: 0;
   display: flex;
@@ -1402,38 +1602,61 @@ fieldset {
   justify-content: center;
   gap: 6px;
   opacity: 0;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.action-reveal-label svg {
+  flex: none;
+}
+.action-pair {
+  --action-pair-width: 9.5rem;
+}
+.account-card-actions:not([data-confirming]) {
+  --action-pair-width: 6.25rem;
+}
+.action-pair > .action-reveal {
+  --action-hover-width: var(--action-pair-width);
+  width: var(--action-width, 34px);
+  padding-inline: 0;
+}
+.action-pair > .action-reveal[data-action-expanded] {
+  --action-width: var(--action-pair-width);
+  --action-icon: hidden;
+  --action-label: 1;
+}
+.action-pair > .action-reveal > :not(.action-reveal-label) {
+  visibility: var(--action-icon, visible);
+}
+.action-pair > .action-reveal > .action-reveal-label {
+  opacity: var(--action-label, 0);
 }
 @media (hover: hover) {
-  .vault-app .export-footer button.export-action:hover:not(:disabled) {
-    --vault-control-tint: var(--vault-button-export-hover-color, var(--vault-button-export-color));
-    --vault-control-tint-strength: var(--vault-button-export-hover-strength, var(--vault-button-export-strength));
+  .vault-app .action-reveal:hover:not(:disabled) {
+    width: var(--action-hover-width, 5.25rem);
   }
-  .export-expanded .transfer-actions .transfer-cancel:hover:not(:disabled) {
-    width: 100%;
-  }
-  .vault-app .export-footer .transfer-cancel:hover:not(:disabled) {
-    --vault-control-tint: var(--vault-button-transfer-cancel-hover-color, #f0bf33);
-    --vault-control-tint-strength: var(--vault-button-transfer-cancel-hover-strength, 90);
-  }
-  .transfer-actions:has(.transfer-cancel:hover:not(:disabled)) .primary,
-  .transfer-cancel:hover:not(:disabled) > svg {
+  .action-reveal:hover:not(:disabled) > :not(.action-reveal-label) {
     visibility: hidden;
   }
-  .transfer-cancel:hover:not(:disabled) .transfer-cancel-label {
+  .action-reveal:hover:not(:disabled) .action-reveal-label {
     opacity: 1;
   }
-}
-@media (hover: hover) and (prefers-reduced-motion: no-preference) {
-  .vault-app .export-expanded .transfer-actions .transfer-cancel:not(:disabled) {
-    transition:
-      width var(--vault-motion-standard) var(--vault-press-ease),
-      scale var(--vault-motion-fast) var(--vault-press-ease);
+  .action-pair:has(> .action-reveal:hover:enabled)
+    > .action-reveal[data-action-expanded]:not(:hover) {
+    --action-width: 34px;
+    --action-icon: visible;
+    --action-label: 0;
   }
-  .transfer-cancel-label {
-    transition: opacity var(--vault-motion-fast) ease-out;
+  .vault-app .action-cancel:hover:not(:disabled) {
+    --vault-control-tint: var(--vault-button-transfer-cancel-hover-color, #f0bf33);
+    --vault-control-tint-strength: var(--vault-button-transfer-cancel-hover-strength, 90);
+    --vault-control-mix: calc(var(--vault-control-tint-strength) * 1%);
+    color: contrast-color(color-mix(in srgb,
+      var(--vault-control-tint) var(--vault-control-mix), var(--vault-panel)));
   }
-  .transfer-cancel:hover:not(:disabled) .transfer-cancel-label {
-    transition-delay: var(--vault-motion-fast);
+  .vault-app .action-cancel:hover:not(:disabled, [data-native-glass]),
+  .vault-app .export-footer .action-cancel:hover:not(:disabled, [data-native-glass]) {
+    background-color: color-mix(in srgb,
+      var(--vault-control-tint) var(--vault-control-mix), var(--vault-raised));
   }
 }
 .transfer-code {
@@ -1512,7 +1735,7 @@ fieldset {
   }
   .profile-settings {
     margin-top: 0;
-    margin-inline-start: auto;
+    margin-inline-start: 0;
   }
 }
 @media (max-width: 600px) {
@@ -1624,11 +1847,31 @@ fieldset {
   }
 }
 
-.detail-pane:has(.inline-editor) {
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .vault-app .action-reveal:not(:disabled):not(.privacy-toggle:focus-visible:not(:hover)) {
+    transition:
+      width var(--vault-motion-standard) var(--vault-press-ease),
+      scale var(--vault-motion-fast) var(--vault-press-ease);
+  }
+  .action-reveal-label {
+    transition: opacity var(--vault-motion-fast) ease-out;
+  }
+  .privacy-toggle:focus-visible:not(:hover) .action-reveal-label {
+    transition: none;
+  }
+  .action-reveal:hover:not(:disabled) .action-reveal-label {
+    transition-delay: var(--vault-motion-fast);
+  }
+}
+.detail-pane:has(> .inline-editor) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding-block-end: 0;
+  padding-inline: 0;
+}
+.detail-pane > .inline-editor {
+  width: 100%;
 }
 .inline-editor,
 .account-editor-form {
@@ -1637,13 +1880,25 @@ fieldset {
   flex-direction: column;
   min-height: 0;
 }
+.account-editor-form[hidden] {
+  display: none;
+}
+.privacy-editor-notice {
+  width: min(calc(100% - 32px), var(--detail-content-width));
+  margin-inline: auto;
+  color: var(--vault-muted);
+}
 .account-editor-fields {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 4px 6px 16px;
-  margin: -4px -6px 0;
+  padding: 4px 16px 16px;
+  margin-block-start: -4px;
   scroll-padding-block: 6px;
+}
+.account-editor-fields > * {
+  width: min(100%, var(--detail-content-width));
+  margin-inline: auto;
 }
 .inline-editor input:not([type="checkbox"]),
 .inline-editor select {
@@ -1653,7 +1908,8 @@ fieldset {
   align-items: start;
 }
 .dialog-actions.editor-actions {
-  margin-top: 0;
+  width: min(calc(100% - 32px), var(--detail-content-width));
+  margin: 0 auto;
 }
 .editor-outside-backdrop {
   position: fixed;
@@ -1772,7 +2028,6 @@ select option {
   place-items: center;
   width: 56px;
   height: 56px;
-  margin-block-end: 14px;
   overflow: hidden;
   border: 1px solid var(--vault-control-border);
   border-radius: 50%;
@@ -1780,6 +2035,12 @@ select option {
   color: var(--vault-text);
   font-size: 1.125rem;
   font-weight: 600;
+}
+.editor-avatar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-block-end: 14px;
 }
 .email-editor-avatar img {
   width: 100%;
@@ -1802,6 +2063,13 @@ select option {
   gap: 8px;
   align-items: center;
   margin-top: 4px;
+}
+.server-refresh-status {
+  color: var(--vault-muted);
+  font-size: 0.8125rem;
+}
+.server-refresh-status:not(:empty) {
+  margin-block-start: 8px;
 }
 .server-summary {
   display: grid;
@@ -1876,7 +2144,7 @@ input[name="reference"],
   rotate: -45deg;
   margin-inline: 1px 3px;
 }
-[aria-expanded="true"] > .disclosure-chevron {
+[aria-expanded="true"] .disclosure-chevron {
   rotate: 45deg;
 }
 .server-summary code {
@@ -2042,16 +2310,7 @@ input[name="reference"],
 }
 .account-delete-review .account-delete-area {
   gap: 8px;
-}
-.account-delete-review .account-delete-area .icon-button {
-  flex: none;
-  width: 34px;
-}
-.account-delete-review .account-delete-area .danger-button {
-  flex: 1;
-  width: auto;
-  min-inline-size: 0;
-  padding-inline: 6px;
+  --action-pair-width: calc(100% - 42px);
 }
 
 .button-spinner {
@@ -2115,7 +2374,7 @@ input[name="reference"],
 }
 
 .profile-theme-switch {
-  margin-block-start: auto;
+  margin-block-start: 0;
 }
 .profile-theme-switch + .profile-settings {
   margin-block-start: 0;
@@ -2133,9 +2392,14 @@ input[name="reference"],
   font-weight: 600;
 }
 @media (max-width: 1040px) {
-  .profile-theme-switch {
+  .profile-utilities {
+    display: flex;
     margin-block-start: 0;
     margin-inline-start: auto;
+  }
+  .profile-theme-switch {
+    margin-block-start: 0;
+    margin-inline-start: 0;
   }
   .profile-theme-switch + .profile-settings {
     margin-inline-start: 0;
@@ -2267,8 +2531,21 @@ html.theme-light.has-native-glass .vault-app:has(.welcome) {
 .account-select-avatar .account-select-ring {
   display: none;
 }
-.account-list li:hover .account-select-avatar .account-avatar-initial,
-.account-select-avatar:focus-visible .account-avatar-initial {
+.account-list-avatar {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.account-list-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.account-list li:hover .account-select-avatar .account-list-avatar,
+.account-select-avatar:focus-visible .account-list-avatar {
   display: none;
 }
 .account-list li:hover .account-select-avatar .account-select-ring,

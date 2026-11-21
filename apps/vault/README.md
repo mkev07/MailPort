@@ -25,6 +25,13 @@ The rename script inherited from shell-zero is not a production build step.
 
 ## Behavior
 
+MailPort caches Gravatar photos in the app's OS cache directory. Open
+**Settings → Cache** to see the space used or clear the stored photos.
+In the account editor, **Edit Gravatar photo** opens Gravatar's verified photo
+editor in a separate MailPort window. Changes apply to that email address's
+Gravatar and refresh the cached photo. The bundled editor's license is in
+[Third-party notices](THIRD_PARTY_NOTICES.md#gravatar-quick-editor).
+
 The vault is stored under Tauri's per-user application data directory for
 `org.mailport.vault`, in `vault.mailport`. On macOS this is normally
 `~/Library/Application Support/org.mailport.vault/vault.mailport`.
@@ -60,9 +67,12 @@ MailPort shows a transfer code for the receiver to compare before import.
 Enter the email address first. MailPort checks built-in provider settings, IMAP
 and SMTP submission DNS SRV records, and MX records for recognized hosting
 providers. It can also read HTTPS autoconfiguration from the domain or the
-Thunderbird provider directory. These lookups use only the domain. MailPort
-does not contact the mail servers during setup. Domains without usable
-settings can be configured manually.
+Thunderbird provider directory. For MXRoute, publish a reseller hostname in
+the address domain's HTTPS autoconfiguration to use it automatically across
+domains. MailPort can also use `mail.<domain>` when its CNAME or address
+records match the MXRoute host and its TLS certificate is valid for the mail
+port. This TLS check sends no login data. MailPort falls back to the original
+MXRoute hostname for each protocol without a usable alias.
 
 By default both servers use the email address and one password or OAuth
 provider. Open **Server settings** to change the ports, enter a shared
@@ -99,7 +109,7 @@ If the CLI has multiple accounts, configure its default account for the vault.
 ## Manual acceptance with synthetic data
 
 1. Create a vault with a disposable test passphrase (at least 12 characters).
-2. Use “Try five sample accounts”; verify four password accounts and one OAuth account.
+2. Add synthetic password and OAuth accounts, then verify each appears in the account list.
 3. Edit a display name and save without re-entering saved passwords.
 4. Lock; check that accounts disappear. Try an incorrect passphrase, then unlock correctly.
 5. Quit and reopen; verify the app starts locked and saved settings survive unlock.

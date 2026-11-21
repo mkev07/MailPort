@@ -37,3 +37,12 @@ code remains MIT licensed.
 
 MailPort uses [Sonner](https://github.com/emilkowalski/sonner) under the MIT
 license. See [the license](licenses/sonner.txt).
+
+## Gravatar Quick Editor
+
+MailPort Vault bundles Gravatar Quick Editor 0.8.0 by Automattic Inc. under
+GPL-2.0-or-later. See [the full license](licenses/Gravatar-GPL-2.0.txt) and
+[the corresponding SDK source](https://github.com/Automattic/gravatar/tree/8f8d681945d77a2586699f6dc2a208878dfd4263/web/packages/quick-editor).
+The Vault build containing this library is distributed under GPL-2.0-or-later.
+MailPort's original source and its separately distributed provisioning SDK
+remain available under the repository's MIT license.

@@ -2375,6 +2375,7 @@ dependencies = [
  "block2",
  "core-foundation 0.10.1",
  "hickory-resolver",
+ "libc",
  "mailport-core",
  "objc2",
  "objc2-app-kit",
@@ -2392,6 +2393,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
  "tokio",
+ "tokio-native-tls",
  "uuid",
  "zeroize",
 ]
